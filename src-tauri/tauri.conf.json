@@ -21,7 +21,7 @@
         "fullscreen": false,
         "visible": true,
         "width": 400,
-        "height": 100,
+        "height": 128,
         "center": true
       }
     ],
