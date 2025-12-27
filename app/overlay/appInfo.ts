@@ -34,6 +34,8 @@ export const blockedAppsForPlaybackModes = [
     'chrome',
     '308046b0af4a39cb', // Firefox
     'brave',
+    'edge',
+    'opera',
 ];
 
 /**
