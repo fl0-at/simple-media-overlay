@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   viewBox="0 0 256.39998 256.4"
+   version="1.1"
+   id="svg7"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs2">
+    <linearGradient
+       id="linearGradient41071">
+      <stop
+         style="stop-color:#ffffff;stop-opacity:1"
+         offset="0"
+         id="stop41067" />
+      <stop
+         style="stop-color:#e0e0e0;stop-opacity:1"
+         offset="1"
+         id="stop41069" />
+    </linearGradient>
+    <linearGradient
+       id="linearGradient14577">
+      <stop
+         style="stop-color:#4c4c4c;stop-opacity:1;"
+         offset="0"
+         id="stop14573" />
+      <stop
+         style="stop-color:#222222;stop-opacity:1"
+         offset="1"
+         id="stop14575" />
+    </linearGradient>
+    <linearGradient
+       id="linearGradient13668">
+      <stop
+         style="stop-color:#fd924b;stop-opacity:1;"
+         offset="0"
+         id="stop13664" />
+      <stop
+         style="stop-color:#cc7384;stop-opacity:1"
+         offset="0.5"
+         id="stop33260" />
+      <stop
+         style="stop-color:#8b62c0;stop-opacity:1"
+         offset="1"
+         id="stop13666" />
+    </linearGradient>
+    <linearGradient
+       xlink:href="#linearGradient13668"
+       id="linearGradient13670"
+       x1="588.5401"
+       y1="450.39008"
+       x2="716.5614"
+       y2="672.12958"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="matrix(1.0015625,0,0,1.0015625,-525.37025,-433.93673)" />
+    <linearGradient
+       xlink:href="#linearGradient14577"
+       id="linearGradient14579"
+       x1="652.55072"
+       y1="454.19733"
+       x2="652.55072"
+       y2="668.32233"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="matrix(0.99784864,0,0,0.99784859,-604.22238,-384.92794)" />
+    <linearGradient
+       xlink:href="#linearGradient41071"
+       id="linearGradient41065"
+       x1="617.74109"
+       y1="506.52988"
+       x2="669.71539"
+       y2="596.19153"
+       gradientUnits="userSpaceOnUse" />
+    <filter
+       style="color-interpolation-filters:sRGB"
+       id="filter43116"
+       x="-0.27242761"
+       y="-0.20453487"
+       width="1.5448552"
+       height="1.4090697">
+      <feFlood
+         flood-opacity="0.298039"
+         flood-color="rgb(0,0,0)"
+         result="flood"
+         id="feFlood43106" />
+      <feComposite
+         in="flood"
+         in2="SourceGraphic"
+         operator="in"
+         result="composite1"
+         id="feComposite43108" />
+      <feGaussianBlur
+         in="composite1"
+         stdDeviation="10"
+         result="blur"
+         id="feGaussianBlur43110" />
+      <feOffset
+         dx="-2.77556e-17"
+         dy="0"
+         result="offset"
+         id="feOffset43112" />
+      <feComposite
+         in="SourceGraphic"
+         in2="offset"
+         operator="over"
+         result="composite2"
+         id="feComposite43114" />
+    </filter>
+  </defs>
+  <circle
+     style="display:inline;fill:url(#linearGradient13670);fill-opacity:1;stroke:#000000;stroke-width:0;stroke-opacity:0;paint-order:stroke fill markers"
+     id="path858"
+     cx="128.2"
+     cy="128.2"
+     r="128.2" />
+  <ellipse
+     style="fill:url(#linearGradient14579);fill-opacity:1;stroke:#000000;stroke-width:0;stroke-opacity:0;paint-order:stroke fill markers"
+     id="path14118"
+     cx="46.924461"
+     cy="175.12448"
+     transform="rotate(-29.999999)"
+     rx="106.83219"
+     ry="106.83218" />
+  <path
+     id="path33458"
+     style="color:#000000;fill:url(#linearGradient41065);fill-opacity:1;stroke-width:0.797748;stroke-linejoin:round;-inkscape-stroke:none;paint-order:stroke fill markers;filter:url(#filter43116)"
+     d="M 620.57517,509.01685 V 613.47109 C 620.57517,618.6848 626.06958,621.62109 630.68351,618.71988 L 704.67053,567.7196 C 709.99533,564.0407 710.01622,558.22145 704.67053,554.76837 L 630.68351,503.77001 C 625.95805,500.5863 620.57517,503.92567 620.57517,509.01685 Z"
+     transform="matrix(0.99545384,0,0,0.99545384,-521.32923,-430.50855)" />
+</svg>

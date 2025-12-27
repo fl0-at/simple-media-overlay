@@ -4,7 +4,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState, useRef, MouseEvent } from 'react';
 import { useMediaInfo } from '@/app/hooks/useMediaInfo';
-import Image from 'next/image';
+import { AlbumArt } from './AlbumArt';
+import { MediaInfo } from './MediaInfo';
+import { MediaTimeline } from './MediaTimeline';
+import { MediaControls } from './MediaControls';
+import { PinButton } from './PinButton';
 
 type RepeatMode = 'none' | 'track' | 'list';
 
@@ -27,7 +31,6 @@ async function sendControl(action: 'playPause' | 'next' | 'previous') {
   try {
     await invoke('control_media', { action });
     if (action === 'next' || action === 'previous') {
-      // Ask backend for an immediate fresh snapshot
       await invoke('refresh_media_snapshot');
     }
   } catch (e) {
@@ -56,10 +59,11 @@ async function sendSeek(positionMs: number) {
 }
 
 export default function OverlayPage() {
-  const media = useMediaInfo(); // existing gsmtc-based metadata (title/artist/album_image)
+  const media = useMediaInfo();
   useEffect(() => {
     console.log('OverlayPage mounted');
   }, []);
+
   const [snapshot, setSnapshot] = useState<MediaSnapshotDto | null>(null);
   const [playElapsedMs, setPlayElapsedMs] = useState(0);
   const [pinned, setPinned] = useState(false);
@@ -79,10 +83,7 @@ export default function OverlayPage() {
   }, []);
 
   useEffect(() => {
-    // If not playing or no valid duration, stop and reset.
     if (!snapshot?.is_playing || !snapshot?.duration_ms || snapshot.duration_ms <= 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setPlayElapsedMs(0);
       return;
     }
 
@@ -90,11 +91,11 @@ export default function OverlayPage() {
     let last = performance.now();
 
     const tick = (now: number) => {
-      const dt = now - last;
+      const deltaMs = now - last;
       last = now;
 
       setPlayElapsedMs((prev) => {
-        const next = prev + dt;
+        const next = prev + deltaMs;
         return Math.min(next, snapshot.duration_ms!);
       });
 
@@ -103,42 +104,47 @@ export default function OverlayPage() {
 
     frameId = requestAnimationFrame(tick);
 
-    // Cleanup: cancel loop and reset elapsed when playback state/duration change
     return () => {
       cancelAnimationFrame(frameId);
       setPlayElapsedMs(0);
     };
   }, [snapshot?.is_playing, snapshot?.duration_ms]);
 
-
   const hasSnapshotTitle = !!snapshot?.props?.title;
   const hasMediaTitle = !!media?.title;
-  const hasAnyMedia = hasSnapshotTitle || hasMediaTitle;
+  const hasActiveMedia = hasSnapshotTitle || hasMediaTitle;
 
   const sourceAppId = snapshot?.source_app_id ?? null;
 
-  // Track last seen sourceAppId and log only when it changes
   const lastSourceAppIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const current = snapshot?.source_app_id ?? null;
     if (lastSourceAppIdRef.current !== current) {
-      // Only log when the source app id actually changes
       console.log('source_app_id changed:', current);
       lastSourceAppIdRef.current = current;
     }
   }, [snapshot?.source_app_id]);
 
   const effectiveTitle = snapshot?.props?.title || media?.title;
-  const effectiveArtist = snapshot?.props?.artist || media?.artist;
-  const effectiveAlbumTitle = snapshot?.props?.album_title ?? media?.album_title ?? null;
 
-  // Title scrolling: measure overflow and animate when needed
+  // Track last title to clear stale artist/album when switching songs
+  const [lastTitle, setLastTitle] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    setLastTitle(effectiveTitle);
+  }, [effectiveTitle]);
+
+  // Only use media fallback if title hasn't changed (same song); otherwise use snapshot values only
+  const shouldUseFallback = effectiveTitle === lastTitle;
+  const effectiveArtist = snapshot?.props?.artist || (shouldUseFallback ? media?.artist : '');
+  const effectiveAlbumTitle = snapshot?.props?.album_title ?? (shouldUseFallback ? media?.album_title : null) ?? null;
+
+  // Title scrolling
   const titleContainerRef = useRef<HTMLDivElement | null>(null);
   const titleInnerRef = useRef<HTMLSpanElement | null>(null);
-  const [titleScroll, setTitleScroll] = useState<{ should: boolean; duration: number; delay: number; fadeKeyframes?: string }>({ should: false, duration: 0, delay: 0 });
+  const [titleMarqueeConfig, setTitleMarqueeConfig] = useState<{ isActive: boolean; duration: number; delay: number; fadeKeyframes?: string }>({ isActive: false, duration: 0, delay: 0 });
 
-  // Animation control refs
   const animationStartTimerRef = useRef<number | null>(null);
   const animationPauseTimerRef = useRef<number | null>(null);
   const animationListenerRef = useRef<((e: AnimationEvent) => void) | null>(null);
@@ -148,17 +154,17 @@ export default function OverlayPage() {
     const inner = titleInnerRef.current;
     if (!container || !inner) return;
 
-    const measureTextWidth = (txt: string, comp: CSSStyleDeclaration) => {
+    const measureTextWidth = (text: string, computedStyle: CSSStyleDeclaration) => {
       try {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         if (!ctx) return 0;
-        const fontSize = comp.fontSize || '16px';
-        const fontWeight = comp.fontWeight || '400';
-        const fontFamily = comp.fontFamily || 'sans-serif';
-        const fontStyle = comp.fontStyle || 'normal';
+        const fontSize = computedStyle.fontSize || '16px';
+        const fontWeight = computedStyle.fontWeight || '400';
+        const fontFamily = computedStyle.fontFamily || 'sans-serif';
+        const fontStyle = computedStyle.fontStyle || 'normal';
         ctx.font = `${fontStyle} ${fontWeight} ${fontSize} ${fontFamily}`;
-        return ctx.measureText(txt).width;
+        return ctx.measureText(text).width;
       } catch {
         return 0;
       }
@@ -178,46 +184,39 @@ export default function OverlayPage() {
         let usedContainerWidth = containerWidth;
 
         if (!should) {
-          let p: HTMLElement | null = inner.parentElement as HTMLElement | null;
-          while (p && p !== document.body) {
-            if (p.clientWidth && p.clientWidth < measuredInnerWidth) {
+          let parentElement: HTMLElement | null = inner.parentElement as HTMLElement | null;
+          while (parentElement && parentElement !== document.body) {
+            if (parentElement.clientWidth && parentElement.clientWidth < measuredInnerWidth) {
               should = true;
-              usedContainerWidth = p.clientWidth;
+              usedContainerWidth = parentElement.clientWidth;
               break;
             }
-            p = p.parentElement as HTMLElement | null;
+            parentElement = parentElement.parentElement as HTMLElement | null;
           }
         }
 
-
-
         if (should) {
-          const distance = measuredInnerWidth + usedContainerWidth; // px to travel
-          const speed = 60; // px per second (slower)
+          const distance = measuredInnerWidth + usedContainerWidth;
+          const speed = 60;
           const travelSeconds = distance / speed;
-          const initialDelay = 2; // seconds before first scroll
-          const pauseBetween = 1.5; // seconds to pause after one full scroll
+          const initialDelay = 2;
+          const pauseBetween = 1.5;
 
-          
-          // Create dynamic keyframes for opacity fade-out with the animation duration
-          const fadeOutDuration = 2; // seconds for fade-out
+          const fadeOutDuration = 2;
           const fadeOutStartPercent = ((travelSeconds - fadeOutDuration) / travelSeconds) * 100;
-          
+
           const keyframesId = `marquee-fade-${Math.random().toString(36).substr(2, 9)}`;
           const keyframesCSS = `@keyframes ${keyframesId} { 0% { opacity: 1; } ${fadeOutStartPercent.toFixed(2)}% { opacity: 1; } 100% { opacity: 0; } }`;
 
-          
-          // Inject the dynamic keyframes
-          const w = globalThis as { marqueeStyleSheet?: HTMLStyleElement };
-          if (!w.marqueeStyleSheet) {
+          const globalState = globalThis as { marqueeStyleSheet?: HTMLStyleElement };
+          if (!globalState.marqueeStyleSheet) {
             const sheet = document.createElement('style');
             document.head.appendChild(sheet);
-            w.marqueeStyleSheet = sheet;
+            globalState.marqueeStyleSheet = sheet;
           }
-          w.marqueeStyleSheet.textContent += keyframesCSS;
-          
+          globalState.marqueeStyleSheet.textContent += keyframesCSS;
 
-          setTitleScroll({ should: true, duration: travelSeconds, delay: initialDelay, fadeKeyframes: keyframesId });
+          setTitleMarqueeConfig({ isActive: true, duration: travelSeconds, delay: initialDelay, fadeKeyframes: keyframesId });
           try {
             (inner as HTMLElement).dataset.marqueePause = String(pauseBetween);
             (inner as HTMLElement).dataset.fadeKeyframes = keyframesId;
@@ -225,23 +224,22 @@ export default function OverlayPage() {
             // ignore
           }
         } else {
-          setTitleScroll({ should: false, duration: 0, delay: 0 });
+          setTitleMarqueeConfig({ isActive: false, duration: 0, delay: 0 });
         }
       });
     };
 
     check();
-    const ro = new ResizeObserver(check);
-    ro.observe(container);
-    ro.observe(inner);
+    const resizeObserver = new ResizeObserver(check);
+    resizeObserver.observe(container);
+    resizeObserver.observe(inner);
     window.addEventListener('resize', check);
     return () => {
-      ro.disconnect();
+      resizeObserver.disconnect();
       window.removeEventListener('resize', check);
     };
   }, [effectiveTitle]);
 
-  // Control the animation lifecycle: JS toggles the `.marquee-anim` class so we can pause and reset between runs.
   useEffect(() => {
     const inner = titleInnerRef.current;
     if (!inner) return;
@@ -257,27 +255,21 @@ export default function OverlayPage() {
       }
     };
 
-    const pauseBetween = parseFloat((inner as HTMLElement).dataset.marqueePause || '1.25');
+    const pauseBetween = parseFloat((inner as HTMLElement).dataset.marqueePause || '1.5');
 
     const onEnd = () => {
-      // One run finished. Stop animation and pause before restarting.
       inner.style.removeProperty('animation');
       inner.style.removeProperty('transform');
       clearTimers();
 
       const pauseMs = Math.round(pauseBetween * 1000);
 
-      // schedule restart at end of pause
       animationStartTimerRef.current = window.setTimeout(() => {
-        // Reapply the animation
         const fadeKeyframes = (inner as HTMLElement).dataset.fadeKeyframes;
         if (fadeKeyframes) {
           const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframes} var(--marquee-travel) ease-in-out`;
           inner.style.animation = animationValue;
           inner.style.animationIterationCount = '1';
-          // force reflow to restart animation
-          // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-          inner.offsetWidth;
         }
       }, pauseMs);
     };
@@ -285,26 +277,21 @@ export default function OverlayPage() {
     animationListenerRef.current = onEnd;
     inner.addEventListener('animationend', onEnd as EventListener);
 
-    // Setup or teardown based on `titleScroll.should`
     clearTimers();
     inner.style.removeProperty('animation');
     inner.style.removeProperty('transform');
     inner.style.removeProperty('--marquee-travel');
 
-    if (titleScroll.should) {
-      inner.style.setProperty('--marquee-travel', `${titleScroll.duration}s`);
-      // Apply both position and opacity animations after the initial delay
-      const delayMs = Math.round(titleScroll.delay * 1000);
+    if (titleMarqueeConfig.isActive) {
+      inner.style.setProperty('--marquee-travel', `${titleMarqueeConfig.duration}s`);
+      const delayMs = Math.round(titleMarqueeConfig.delay * 1000);
       animationStartTimerRef.current = window.setTimeout(() => {
-        // Get fadeKeyframes from the state passed in the effect
-        const fadeKeyframes = titleScroll.fadeKeyframes;
+        const fadeKeyframes = titleMarqueeConfig.fadeKeyframes;
         if (fadeKeyframes) {
-          // Apply the animation directly via inline style
           const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframes} var(--marquee-travel) ease-in-out`;
           inner.style.animation = animationValue;
           inner.style.animationIterationCount = '1';
         }
-        // force reflow to ensure animation starts
         // eslint-disable-next-line @typescript-eslint/no-unused-expressions
         inner.offsetWidth;
       }, delayMs);
@@ -318,7 +305,7 @@ export default function OverlayPage() {
       inner.style.removeProperty('animation');
       inner.style.removeProperty('animation-iteration-count');
     };
-  }, [titleScroll.should, titleScroll.duration, titleScroll.delay, titleScroll.fadeKeyframes, effectiveTitle]);
+  }, [titleMarqueeConfig.isActive, titleMarqueeConfig.duration, titleMarqueeConfig.delay, titleMarqueeConfig.fadeKeyframes, effectiveTitle]);
 
   const snapshotImage = snapshot?.props?.album_image
     ? `data:image/png;base64,${snapshot.props.album_image}`
@@ -335,19 +322,12 @@ export default function OverlayPage() {
 
   const isPlaying = snapshot?.is_playing ?? false;
   const isShuffle = snapshot?.is_shuffle ?? false;
-  const repeatMode: RepeatMode | null = snapshot?.repeat_mode ?? null;
-  const isRepeat = repeatMode === 'track' || repeatMode === 'list';
+  const isRepeat = snapshot?.repeat_mode === 'track';
 
-  let effectivePositionMs = basePositionMs;
-
-  if (
-    isPlaying &&
-    durationMs &&
-    durationMs > 0 &&
-    basePositionMs != null
-  ) {
+  let effectivePositionMs = basePositionMs ?? 0;
+  if (isPlaying && basePositionMs != null && playElapsedMs > 0) {
     const advanced = basePositionMs + playElapsedMs;
-    effectivePositionMs = Math.min(durationMs, advanced);
+    effectivePositionMs = Math.min(durationMs || Infinity, advanced);
   }
 
   const hasTimeline = durationMs && durationMs > 0;
@@ -366,174 +346,89 @@ export default function OverlayPage() {
     sendSeek(targetMs);
   };
 
+  const TitleComponent = (
+    <div
+      ref={titleContainerRef}
+      className="flex-row text-lg font-semibold text-white w-full marquee-container"
+      style={{
+        WebkitAppRegion: pinned ? 'no-drag' : 'drag',
+        userSelect: 'none',
+      } as never}
+    >
+      <span
+        ref={titleInnerRef}
+        className={'marquee-inner' + (titleMarqueeConfig.isActive ? ' marquee' : '')}
+      >
+        {effectiveTitle}
+      </span>
+    </div>
+  );
+
+  const ArtistComponent = (
+    <div
+      className="flex-row text-sm text-white/80 w-full"
+      style={{
+        WebkitAppRegion: pinned ? 'no-drag' : 'drag',
+        userSelect: 'none',
+      } as never}
+    >
+      {effectiveArtist??'Unknown Artist'}
+    </div>
+  );
+
+  const AlbumComponent = media?.album_title && (
+    <div
+      className="flex-row text-xs text-white/60 w-full"
+      style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
+    >
+      {effectiveAlbumTitle}
+    </div>
+  );
+
   return (
     <div
       className="w-screen h-screen flex items-center flex-start gap-1 flex-row px-2 py-1.5"
       style={{ background: 'rgba(0,0,0,0.75)', WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
     >
-      {hasAnyMedia ? (
+      {hasActiveMedia ? (
         <>
+          <AlbumArt imageSrc={imageSrc} albumTitle={effectiveAlbumTitle} pinned={pinned} sourceAppId={sourceAppId} />
           <div
-            className="flex flex-col items-center justify-center p-1 min-w-25 min-h-25"
+            className="flex flex-col content-center justify-center w-70 h-32"
             style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
           >
-            {imageSrc && (
-              <Image
-                src={imageSrc}
-                alt={effectiveAlbumTitle || 'No Album Art'}
-                className="w-24 h-24 rounded-md object-cover"
-                draggable={false}
-                onDragStart={(e) => {
-                  if (pinned) e.preventDefault();
-                }}
-                style={{ 
-                  WebkitAppRegion: pinned ? 'no-drag' : 'drag',
-                  userSelect: 'none',
-                } as never}
-                width={128}
-                height={128}
+            <div className="flex flex-row w-full">
+              <MediaInfo
+                title={TitleComponent}
+                artist={ArtistComponent}
+                albumTitle={AlbumComponent}
+                pinned={pinned}
               />
-            )}
-          </div>
-          <div
-            className="flex flex-col content-center justify-center w-70"
-            style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
-          >
-            <div
-              className="flex items-center gap-0.5 flex-col w-full"
-              style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
-            >
-              <div
-                ref={titleContainerRef}
-                className="text-lg font-semibold text-white w-full marquee-container"
-                style={{ 
-                  WebkitAppRegion: pinned ? 'no-drag' : 'drag',
-                  userSelect: 'none',
-                } as never}
-              >
-                <span
-                  ref={titleInnerRef}
-                  className={'marquee-inner' + (titleScroll.should ? ' marquee' : '')}
-                >
-                  {effectiveTitle}
-                </span>
-              </div>
-              <div
-                className="text-sm text-white/80 w-full"
-                style={{ 
-                  WebkitAppRegion: pinned ? 'no-drag' : 'drag',
-                  userSelect: 'none',
-                } as never}
-              >
-                {effectiveArtist}
-              </div>
-              {media?.album_title && (
-                <div
-                  className="text-xs text-white/60 w-full"
-                  style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
-                >
-                  {effectiveAlbumTitle}
-                </div>
-              )}
+              <PinButton pinned={pinned} onToggle={() => setPinned((v) => !v)} />
             </div>
 
-            {/* Timeline */}
-            {hasTimeline && (
-              <div
-                className="mt-2 w-full h-1.5 bg-white/15 rounded-full cursor-pointer"
-                style={{ 
-                  WebkitAppRegion: 'no-drag',
-                  userSelect: 'none',
-                } as never}
-                onClick={handleProgressClick}
-              >
-                <div
-                  className="h-full bg-white rounded-full"
-                  style={{ width: `${progress * 100}%` }}
-                />
-              </div>
-            )}
+            <MediaTimeline
+              hasTimeline={!!hasTimeline}
+              progress={progress}
+              onProgressClick={handleProgressClick}
+            />
 
-            <div
-              className="flex items-center gap-3 mt-3 justify-center"
-              style={{ 
-                WebkitAppRegion: pinned ? 'no-drag' : 'drag',
-                userSelect: 'none',
-              } as never}
-            >
-              {sourceAppId == 'com.squirrel.TIDAL.TIDAL' || sourceAppId == 'Chrome' ? null :
-                <button
-                  className={
-                    'px-2 py-1 rounded-full text-xs ' +
-                    (isRepeat
-                      ? 'bg-white text-black font-semibold'
-                      : 'bg-white/10 hover:bg-white/20 text-white')
-                  }
-                  onClick={() => sendPlaybackMode('repeat', !isRepeat)}
-                  id="repeat-button"
-                  style={{ WebkitAppRegion: 'no-drag' } as never}
-                >
-                  🔁
-                </button>
-              }
-              <button
-                className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
-                id="back-button"
-                onClick={() => sendControl('previous')}
-                style={{ WebkitAppRegion: 'no-drag' } as never}
-              >
-                I◀◀
-              </button>
-              <button
-                className="px-3 py-1 rounded-full bg-white hover:bg-white/80 text-xs text-black font-semibold"
-                id="play-pause-button"
-                onClick={() => sendControl('playPause')}
-                style={{ WebkitAppRegion: 'no-drag' } as never}
-              >
-                {isPlaying ? ' ⏸ ' : ' ▶ '}
-              </button>
-              <button
-                className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
-                id="next-button"
-                onClick={() => sendControl('next')}
-                style={{ WebkitAppRegion: 'no-drag' } as never}
-              >
-                ▶▶I
-              </button>
-              {sourceAppId == 'com.squirrel.TIDAL.TIDAL' || sourceAppId == 'Chrome' ? null :
-                <button
-                  className={
-                    'px-2 py-1 rounded-full text-xs ' +
-                    (isShuffle
-                      ? 'bg-white text-black font-semibold'
-                      : 'bg-white/10 hover:bg-white/20 text-white')
-                  }
-                  onClick={() => sendPlaybackMode('shuffle', !isShuffle)}
-                  id="shuffle-button"
-                  style={{ WebkitAppRegion: 'no-drag' } as never}
-                >
-                  🔀
-                </button>
-              }              
-            </div>
-            <div className="fixed bottom-3.5 right-2">
-              <button
-                className={
-                  'px-2 py-1 rounded-full text-xs ' +
-                  (pinned
-                    ? 'bg-white hover:bg-white/80 text-black'
-                    : 'bg-white/10 hover:bg-white/20 text-white')
-                }
-                onClick={() => setPinned((v) => !v)}
-                style={{ WebkitAppRegion: 'no-drag' } as never}
-              >
-                {pinned ? '📍' : '📌'}
-              </button>
-            </div>
+            <MediaControls
+              isPlaying={isPlaying}
+              isShuffle={isShuffle}
+              isRepeat={isRepeat}
+              sourceAppId={sourceAppId}
+              pinned={pinned}
+              onPlayPause={() => sendControl('playPause')}
+              onPrevious={() => sendControl('previous')}
+              onNext={() => sendControl('next')}
+              onShuffle={(value) => sendPlaybackMode('shuffle', value)}
+              onRepeat={(value) => sendPlaybackMode('repeat', value)}
+            />
+            
           </div>
         </>
       ) : (
-        // Placeholder when no media
         <div
           className="flex flex-col items-center justify-center w-full py-4"
           style={{ WebkitAppRegion: 'drag' } as never}
@@ -547,6 +442,5 @@ export default function OverlayPage() {
         </div>
       )}
     </div>
-
   );
 }
