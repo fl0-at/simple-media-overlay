@@ -23,3 +23,5 @@ npx tauri build
 ## Current Limitations
 
 For some reason, the shuffle and repeat functionality don't seem to work when playing media via the Tidal Desktop App or Chrome, so I've hidden those buttons for now in those cases, as they wouldn't be functional anyway.
+
+Since this app is based around the win-gsmtc crate, please don't expect me to add support for other OSes 🙂
