@@ -19,3 +19,7 @@ If you want to actually build from the source, run this command:
 ```bash
 npx tauri build
 ```
+
+## Current Limitations
+
+For some reason, the shuffle and repeat functionality don't seem to work when playing media via the Tidal Desktop App or Chrome, so I've hidden those buttons for now in those cases, as they wouldn't be functional anyway.

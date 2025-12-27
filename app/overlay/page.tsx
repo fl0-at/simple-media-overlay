@@ -106,18 +106,22 @@ export default function OverlayPage() {
     };
   }, [snapshot?.is_playing, snapshot?.duration_ms]);
 
-  if (!media || !media.title) return null;
 
+  const hasSnapshotTitle = !!snapshot?.props?.title;
+  const hasMediaTitle = !!media?.title;
+  const hasAnyMedia = hasSnapshotTitle || hasMediaTitle;
 
-  const effectiveTitle = snapshot?.props?.title || media.title;
-  const effectiveArtist = snapshot?.props?.artist || media.artist;
-  const effectiveAlbumTitle = snapshot?.props?.album_title ?? media.album_title ?? null;
+  const sourceAppId = snapshot?.source_app_id ?? null;
+  
+  const effectiveTitle = snapshot?.props?.title || media?.title;
+  const effectiveArtist = snapshot?.props?.artist || media?.artist;
+  const effectiveAlbumTitle = snapshot?.props?.album_title ?? media?.album_title ?? null;
 
   const snapshotImage = snapshot?.props?.album_image
     ? `data:image/png;base64,${snapshot.props.album_image}`
     : null;
 
-  const mediaImage = media.album_image
+  const mediaImage = media?.album_image
     ? `data:image/png;base64,${media.album_image}`
     : null;
 
@@ -164,116 +168,138 @@ export default function OverlayPage() {
       className="w-screen h-screen flex items-center flex-start gap-1 flex-row px-2 py-1.5"
       style={{ background: 'rgba(0,0,0,0.75)', WebkitAppRegion: 'drag' } as never}
     >
-      <div
-        className="flex flex-col items-center justify-center p-1 min-w-25 min-h-25"
-        style={{ WebkitAppRegion: 'drag' } as never}
-      >
-        {imageSrc && (
-          <Image
-            src={imageSrc}
-            alt={media.title}
-            className="w-24 h-24 rounded-md object-cover"
-            style={{ WebkitAppRegion: 'drag' } as never}
-            width={128}
-            height={128}
-          />
-        )}
-      </div>
-      <div
-        className="flex flex-col content-center justify-center w-full"
-        style={{ WebKitAppRegion: 'drag' } as never}
-      >
-        <div
-          className="flex items-center gap-0.5 flex-col w-full"
-          style={{ WebkitAppRegion: 'drag' } as never}
-        >
+      {hasAnyMedia ? (
+        <>
           <div
-            className="text-lg font-semibold text-white w-full"
+            className="flex flex-col items-center justify-center p-1 min-w-25 min-h-25"
             style={{ WebkitAppRegion: 'drag' } as never}
           >
-            {effectiveTitle}
+            {imageSrc && (
+              <Image
+                src={imageSrc}
+                alt={effectiveAlbumTitle || 'No Album Art'}
+                className="w-24 h-24 rounded-md object-cover"
+                style={{ WebkitAppRegion: 'drag' } as never}
+                width={128}
+                height={128}
+              />
+            )}
           </div>
           <div
-            className="text-sm text-white/80 w-full"
-            style={{ WebkitAppRegion: 'drag' } as never}
+            className="flex flex-col content-center justify-center w-full"
+            style={{ WebKitAppRegion: 'drag' } as never}
           >
-            {effectiveArtist}
-          </div>
-          {media.album_title && (
             <div
-              className="text-xs text-white/60 w-full"
+              className="flex items-center gap-0.5 flex-col w-full"
               style={{ WebkitAppRegion: 'drag' } as never}
             >
-              {effectiveAlbumTitle}
+              <div
+                className="text-lg font-semibold text-white w-full"
+                style={{ WebkitAppRegion: 'drag' } as never}
+              >
+                {effectiveTitle}
+              </div>
+              <div
+                className="text-sm text-white/80 w-full"
+                style={{ WebkitAppRegion: 'drag' } as never}
+              >
+                {effectiveArtist}
+              </div>
+              {media?.album_title && (
+                <div
+                  className="text-xs text-white/60 w-full"
+                  style={{ WebkitAppRegion: 'drag' } as never}
+                >
+                  {effectiveAlbumTitle}
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Timeline */}
-        {hasTimeline && (
-          <div
-            className="mt-2 w-full h-1.5 bg-white/15 rounded-full cursor-pointer"
-            style={{ WebkitAppRegion: 'no-drag' } as never}
-            onClick={handleProgressClick}
-          >
+            {/* Timeline */}
+            {hasTimeline && (
+              <div
+                className="mt-2 w-full h-1.5 bg-white/15 rounded-full cursor-pointer"
+                style={{ WebkitAppRegion: 'no-drag' } as never}
+                onClick={handleProgressClick}
+              >
+                <div
+                  className="h-full bg-white rounded-full"
+                  style={{ width: `${progress * 100}%` }}
+                />
+              </div>
+            )}
+
             <div
-              className="h-full bg-white rounded-full"
-              style={{ width: `${progress * 100}%` }}
-            />
+              className="flex items-center gap-3 mt-3 justify-center"
+              style={{ WebkitAppRegion: 'no-drag' } as never}
+            >
+              {sourceAppId == 'com.squirrel.TIDAL.TIDAL' || sourceAppId == 'Chrome' ? null :
+                <button
+                  className={
+                    'px-2 py-1 rounded-full text-xs ' +
+                    (isRepeat
+                      ? 'bg-white text-black font-semibold'
+                      : 'bg-white/10 hover:bg-white/20 text-white')
+                  }
+                  onClick={() => sendPlaybackMode('repeat', !isRepeat)}
+                  id="repeat-button"
+                >
+                  🔁
+                </button>
+              }
+              <button
+                className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
+                id="back-button"
+                onClick={() => sendControl('previous')}
+              >
+                I◀◀
+              </button>
+              <button
+                className="px-3 py-1 rounded-full bg-white hover:bg-white/80 text-xs text-black font-semibold"
+                id="play-pause-button"
+                onClick={() => sendControl('playPause')}
+              >
+                {isPlaying ? ' ⏸ ' : ' ▶ '}
+              </button>
+              <button
+                className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
+                id="next-button"
+                onClick={() => sendControl('next')}
+              >
+                ▶▶I
+              </button>
+              {sourceAppId == 'com.squirrel.TIDAL.TIDAL' || sourceAppId == 'Chrome' ? null :
+                <button
+                  className={
+                    'px-2 py-1 rounded-full text-xs ' +
+                    (isShuffle
+                      ? 'bg-white text-black font-semibold'
+                      : 'bg-white/10 hover:bg-white/20 text-white')
+                  }
+                  onClick={() => sendPlaybackMode('shuffle', !isShuffle)}
+                  id="shuffle-button"
+                >
+                  🔀
+                </button>
+              }
+            </div>
           </div>
-        )}
-
+        </>
+      ) : (
+        // Placeholder when no media
         <div
-          className="flex items-center gap-3 mt-3 justify-center"
-          style={{ WebkitAppRegion: 'no-drag' } as never}
+          className="flex flex-col items-center justify-center w-full py-4"
+          style={{ WebkitAppRegion: 'drag' } as never}
         >
-          <button
-            className={
-              'px-2 py-1 rounded-full text-xs ' +
-              (isRepeat
-                ? 'bg-white text-black font-semibold'
-                : 'bg-white/10 hover:bg-white/20 text-white')
-            }
-            onClick={() => sendPlaybackMode('repeat', !isRepeat)}
-            id="repeat-button"
-          >
-            🔁
-          </button>
-          <button
-            className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
-            id="back-button"
-            onClick={() => sendControl('previous')}
-          >
-            I◀◀
-          </button>
-          <button
-            className="px-3 py-1 rounded-full bg-white hover:bg-white/80 text-xs text-black font-semibold"
-            id="play-pause-button"
-            onClick={() => sendControl('playPause')}
-          >
-            {isPlaying ? ' ⏸ ' : ' ▶ '}
-          </button>
-          <button
-            className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
-            id="next-button"
-            onClick={() => sendControl('next')}
-          >
-            ▶▶I
-          </button>
-          <button
-            className={
-              'px-2 py-1 rounded-full text-xs ' +
-              (isShuffle
-                ? 'bg-white text-black font-semibold'
-                : 'bg-white/10 hover:bg-white/20 text-white')
-            }
-            onClick={() => sendPlaybackMode('shuffle', !isShuffle)}
-            id="shuffle-button"
-          >
-            🔀
-          </button>
+          <div className="text-sm text-white/60">
+            🔇 No media is currently playing 🔇
+          </div>
+          <div className="text-xs text-white/40 mt-1">
+            🎵 Start playback in your favorite player to see controls here 🎶
+          </div>
         </div>
-      </div>
+      )}
     </div>
+
   );
 }
