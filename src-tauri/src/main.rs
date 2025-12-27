@@ -249,7 +249,7 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
             let _ = app.emit("media_snapshot", snap);
         }
 
-        sleep(Duration::from_millis(500)).await;
+        sleep(Duration::from_millis(150)).await;
     }
 }
 

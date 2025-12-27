@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useEffect, useState, MouseEvent } from 'react';
+import { useEffect, useState, useRef, MouseEvent } from 'react';
 import { useMediaInfo } from '@/app/hooks/useMediaInfo';
 import Image from 'next/image';
 
@@ -57,8 +57,12 @@ async function sendSeek(positionMs: number) {
 
 export default function OverlayPage() {
   const media = useMediaInfo(); // existing gsmtc-based metadata (title/artist/album_image)
+  useEffect(() => {
+    console.log('OverlayPage mounted');
+  }, []);
   const [snapshot, setSnapshot] = useState<MediaSnapshotDto | null>(null);
   const [playElapsedMs, setPlayElapsedMs] = useState(0);
+  const [pinned, setPinned] = useState(false);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -112,10 +116,209 @@ export default function OverlayPage() {
   const hasAnyMedia = hasSnapshotTitle || hasMediaTitle;
 
   const sourceAppId = snapshot?.source_app_id ?? null;
-  
+
+  // Track last seen sourceAppId and log only when it changes
+  const lastSourceAppIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const current = snapshot?.source_app_id ?? null;
+    if (lastSourceAppIdRef.current !== current) {
+      // Only log when the source app id actually changes
+      console.log('source_app_id changed:', current);
+      lastSourceAppIdRef.current = current;
+    }
+  }, [snapshot?.source_app_id]);
+
   const effectiveTitle = snapshot?.props?.title || media?.title;
   const effectiveArtist = snapshot?.props?.artist || media?.artist;
   const effectiveAlbumTitle = snapshot?.props?.album_title ?? media?.album_title ?? null;
+
+  // Title scrolling: measure overflow and animate when needed
+  const titleContainerRef = useRef<HTMLDivElement | null>(null);
+  const titleInnerRef = useRef<HTMLSpanElement | null>(null);
+  const [titleScroll, setTitleScroll] = useState<{ should: boolean; duration: number; delay: number; fadeKeyframes?: string }>({ should: false, duration: 0, delay: 0 });
+
+  // Animation control refs
+  const animationStartTimerRef = useRef<number | null>(null);
+  const animationPauseTimerRef = useRef<number | null>(null);
+  const animationListenerRef = useRef<((e: AnimationEvent) => void) | null>(null);
+
+  useEffect(() => {
+    const container = titleContainerRef.current;
+    const inner = titleInnerRef.current;
+    if (!container || !inner) return;
+
+    const measureTextWidth = (txt: string, comp: CSSStyleDeclaration) => {
+      try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return 0;
+        const fontSize = comp.fontSize || '16px';
+        const fontWeight = comp.fontWeight || '400';
+        const fontFamily = comp.fontFamily || 'sans-serif';
+        const fontStyle = comp.fontStyle || 'normal';
+        ctx.font = `${fontStyle} ${fontWeight} ${fontSize} ${fontFamily}`;
+        return ctx.measureText(txt).width;
+      } catch {
+        return 0;
+      }
+    };
+
+    const check = () => {
+      window.requestAnimationFrame(() => {
+        const innerScrollWidth = inner.scrollWidth;
+        const innerOffsetWidth = inner.offsetWidth;
+        const containerWidth = container.clientWidth;
+        const text = inner.textContent?.trim() ?? '';
+        const computed = window.getComputedStyle(inner);
+
+        const measuredInnerWidth = innerScrollWidth || measureTextWidth(text, computed) || innerOffsetWidth || 0;
+
+        let should = measuredInnerWidth > containerWidth;
+        let usedContainerWidth = containerWidth;
+
+        if (!should) {
+          let p: HTMLElement | null = inner.parentElement as HTMLElement | null;
+          while (p && p !== document.body) {
+            if (p.clientWidth && p.clientWidth < measuredInnerWidth) {
+              should = true;
+              usedContainerWidth = p.clientWidth;
+              break;
+            }
+            p = p.parentElement as HTMLElement | null;
+          }
+        }
+
+
+
+        if (should) {
+          const distance = measuredInnerWidth + usedContainerWidth; // px to travel
+          const speed = 60; // px per second (slower)
+          const travelSeconds = distance / speed;
+          const initialDelay = 2; // seconds before first scroll
+          const pauseBetween = 1.5; // seconds to pause after one full scroll
+
+          
+          // Create dynamic keyframes for opacity fade-out with the animation duration
+          const fadeOutDuration = 2; // seconds for fade-out
+          const fadeOutStartPercent = ((travelSeconds - fadeOutDuration) / travelSeconds) * 100;
+          
+          const keyframesId = `marquee-fade-${Math.random().toString(36).substr(2, 9)}`;
+          const keyframesCSS = `@keyframes ${keyframesId} { 0% { opacity: 1; } ${fadeOutStartPercent.toFixed(2)}% { opacity: 1; } 100% { opacity: 0; } }`;
+
+          
+          // Inject the dynamic keyframes
+          const w = globalThis as { marqueeStyleSheet?: HTMLStyleElement };
+          if (!w.marqueeStyleSheet) {
+            const sheet = document.createElement('style');
+            document.head.appendChild(sheet);
+            w.marqueeStyleSheet = sheet;
+          }
+          w.marqueeStyleSheet.textContent += keyframesCSS;
+          
+
+          setTitleScroll({ should: true, duration: travelSeconds, delay: initialDelay, fadeKeyframes: keyframesId });
+          try {
+            (inner as HTMLElement).dataset.marqueePause = String(pauseBetween);
+            (inner as HTMLElement).dataset.fadeKeyframes = keyframesId;
+          } catch {
+            // ignore
+          }
+        } else {
+          setTitleScroll({ should: false, duration: 0, delay: 0 });
+        }
+      });
+    };
+
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(container);
+    ro.observe(inner);
+    window.addEventListener('resize', check);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', check);
+    };
+  }, [effectiveTitle]);
+
+  // Control the animation lifecycle: JS toggles the `.marquee-anim` class so we can pause and reset between runs.
+  useEffect(() => {
+    const inner = titleInnerRef.current;
+    if (!inner) return;
+
+    const clearTimers = () => {
+      if (animationStartTimerRef.current) {
+        window.clearTimeout(animationStartTimerRef.current);
+        animationStartTimerRef.current = null;
+      }
+      if (animationPauseTimerRef.current) {
+        window.clearTimeout(animationPauseTimerRef.current);
+        animationPauseTimerRef.current = null;
+      }
+    };
+
+    const pauseBetween = parseFloat((inner as HTMLElement).dataset.marqueePause || '1.25');
+
+    const onEnd = () => {
+      // One run finished. Stop animation and pause before restarting.
+      inner.style.removeProperty('animation');
+      inner.style.removeProperty('transform');
+      clearTimers();
+
+      const pauseMs = Math.round(pauseBetween * 1000);
+
+      // schedule restart at end of pause
+      animationStartTimerRef.current = window.setTimeout(() => {
+        // Reapply the animation
+        const fadeKeyframes = (inner as HTMLElement).dataset.fadeKeyframes;
+        if (fadeKeyframes) {
+          const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframes} var(--marquee-travel) ease-in-out`;
+          inner.style.animation = animationValue;
+          inner.style.animationIterationCount = '1';
+          // force reflow to restart animation
+          // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+          inner.offsetWidth;
+        }
+      }, pauseMs);
+    };
+
+    animationListenerRef.current = onEnd;
+    inner.addEventListener('animationend', onEnd as EventListener);
+
+    // Setup or teardown based on `titleScroll.should`
+    clearTimers();
+    inner.style.removeProperty('animation');
+    inner.style.removeProperty('transform');
+    inner.style.removeProperty('--marquee-travel');
+
+    if (titleScroll.should) {
+      inner.style.setProperty('--marquee-travel', `${titleScroll.duration}s`);
+      // Apply both position and opacity animations after the initial delay
+      const delayMs = Math.round(titleScroll.delay * 1000);
+      animationStartTimerRef.current = window.setTimeout(() => {
+        // Get fadeKeyframes from the state passed in the effect
+        const fadeKeyframes = titleScroll.fadeKeyframes;
+        if (fadeKeyframes) {
+          // Apply the animation directly via inline style
+          const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframes} var(--marquee-travel) ease-in-out`;
+          inner.style.animation = animationValue;
+          inner.style.animationIterationCount = '1';
+        }
+        // force reflow to ensure animation starts
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        inner.offsetWidth;
+      }, delayMs);
+    }
+
+    return () => {
+      clearTimers();
+      inner.removeEventListener('animationend', onEnd as EventListener);
+      inner.style.removeProperty('--marquee-travel');
+      inner.style.removeProperty('transform');
+      inner.style.removeProperty('animation');
+      inner.style.removeProperty('animation-iteration-count');
+    };
+  }, [titleScroll.should, titleScroll.duration, titleScroll.delay, titleScroll.fadeKeyframes, effectiveTitle]);
 
   const snapshotImage = snapshot?.props?.album_image
     ? `data:image/png;base64,${snapshot.props.album_image}`
@@ -166,49 +369,68 @@ export default function OverlayPage() {
   return (
     <div
       className="w-screen h-screen flex items-center flex-start gap-1 flex-row px-2 py-1.5"
-      style={{ background: 'rgba(0,0,0,0.75)', WebkitAppRegion: 'drag' } as never}
+      style={{ background: 'rgba(0,0,0,0.75)', WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
     >
       {hasAnyMedia ? (
         <>
           <div
             className="flex flex-col items-center justify-center p-1 min-w-25 min-h-25"
-            style={{ WebkitAppRegion: 'drag' } as never}
+            style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
           >
             {imageSrc && (
               <Image
                 src={imageSrc}
                 alt={effectiveAlbumTitle || 'No Album Art'}
                 className="w-24 h-24 rounded-md object-cover"
-                style={{ WebkitAppRegion: 'drag' } as never}
+                draggable={false}
+                onDragStart={(e) => {
+                  if (pinned) e.preventDefault();
+                }}
+                style={{ 
+                  WebkitAppRegion: pinned ? 'no-drag' : 'drag',
+                  userSelect: 'none',
+                } as never}
                 width={128}
                 height={128}
               />
             )}
           </div>
           <div
-            className="flex flex-col content-center justify-center w-full"
-            style={{ WebKitAppRegion: 'drag' } as never}
+            className="flex flex-col content-center justify-center w-70"
+            style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
           >
             <div
               className="flex items-center gap-0.5 flex-col w-full"
-              style={{ WebkitAppRegion: 'drag' } as never}
+              style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
             >
               <div
-                className="text-lg font-semibold text-white w-full"
-                style={{ WebkitAppRegion: 'drag' } as never}
+                ref={titleContainerRef}
+                className="text-lg font-semibold text-white w-full marquee-container"
+                style={{ 
+                  WebkitAppRegion: pinned ? 'no-drag' : 'drag',
+                  userSelect: 'none',
+                } as never}
               >
-                {effectiveTitle}
+                <span
+                  ref={titleInnerRef}
+                  className={'marquee-inner' + (titleScroll.should ? ' marquee' : '')}
+                >
+                  {effectiveTitle}
+                </span>
               </div>
               <div
                 className="text-sm text-white/80 w-full"
-                style={{ WebkitAppRegion: 'drag' } as never}
+                style={{ 
+                  WebkitAppRegion: pinned ? 'no-drag' : 'drag',
+                  userSelect: 'none',
+                } as never}
               >
                 {effectiveArtist}
               </div>
               {media?.album_title && (
                 <div
                   className="text-xs text-white/60 w-full"
-                  style={{ WebkitAppRegion: 'drag' } as never}
+                  style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
                 >
                   {effectiveAlbumTitle}
                 </div>
@@ -219,7 +441,10 @@ export default function OverlayPage() {
             {hasTimeline && (
               <div
                 className="mt-2 w-full h-1.5 bg-white/15 rounded-full cursor-pointer"
-                style={{ WebkitAppRegion: 'no-drag' } as never}
+                style={{ 
+                  WebkitAppRegion: 'no-drag',
+                  userSelect: 'none',
+                } as never}
                 onClick={handleProgressClick}
               >
                 <div
@@ -231,7 +456,10 @@ export default function OverlayPage() {
 
             <div
               className="flex items-center gap-3 mt-3 justify-center"
-              style={{ WebkitAppRegion: 'no-drag' } as never}
+              style={{ 
+                WebkitAppRegion: pinned ? 'no-drag' : 'drag',
+                userSelect: 'none',
+              } as never}
             >
               {sourceAppId == 'com.squirrel.TIDAL.TIDAL' || sourceAppId == 'Chrome' ? null :
                 <button
@@ -243,6 +471,7 @@ export default function OverlayPage() {
                   }
                   onClick={() => sendPlaybackMode('repeat', !isRepeat)}
                   id="repeat-button"
+                  style={{ WebkitAppRegion: 'no-drag' } as never}
                 >
                   🔁
                 </button>
@@ -251,6 +480,7 @@ export default function OverlayPage() {
                 className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
                 id="back-button"
                 onClick={() => sendControl('previous')}
+                style={{ WebkitAppRegion: 'no-drag' } as never}
               >
                 I◀◀
               </button>
@@ -258,6 +488,7 @@ export default function OverlayPage() {
                 className="px-3 py-1 rounded-full bg-white hover:bg-white/80 text-xs text-black font-semibold"
                 id="play-pause-button"
                 onClick={() => sendControl('playPause')}
+                style={{ WebkitAppRegion: 'no-drag' } as never}
               >
                 {isPlaying ? ' ⏸ ' : ' ▶ '}
               </button>
@@ -265,6 +496,7 @@ export default function OverlayPage() {
                 className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
                 id="next-button"
                 onClick={() => sendControl('next')}
+                style={{ WebkitAppRegion: 'no-drag' } as never}
               >
                 ▶▶I
               </button>
@@ -278,10 +510,25 @@ export default function OverlayPage() {
                   }
                   onClick={() => sendPlaybackMode('shuffle', !isShuffle)}
                   id="shuffle-button"
+                  style={{ WebkitAppRegion: 'no-drag' } as never}
                 >
                   🔀
                 </button>
-              }
+              }              
+            </div>
+            <div className="fixed bottom-3.5 right-2">
+              <button
+                className={
+                  'px-2 py-1 rounded-full text-xs ' +
+                  (pinned
+                    ? 'bg-white hover:bg-white/80 text-black'
+                    : 'bg-white/10 hover:bg-white/20 text-white')
+                }
+                onClick={() => setPinned((v) => !v)}
+                style={{ WebkitAppRegion: 'no-drag' } as never}
+              >
+                {pinned ? '📍' : '📌'}
+              </button>
             </div>
           </div>
         </>

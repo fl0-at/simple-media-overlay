@@ -5,6 +5,29 @@
   --foreground: #171717;
 }
 
+/* Marquee for long titles */
+.marquee-container {
+  overflow: hidden;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.marquee {
+  display: inline-block;
+  padding-left: 0;
+}
+
+/* Ensure inner text measures correctly even before animation */
+.marquee-inner {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+@keyframes marquee-move {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-100%); }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
