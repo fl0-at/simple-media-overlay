@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -315,7 +316,7 @@ async fn start_media_listener(
                     if let SessionUpdateEvent::Media(session_model, image) = update {
                         let album_image = image
                             .and_then(|img| Some(img.data))
-                            .map(|bytes| base64::encode(bytes));
+                            .map(|bytes| BASE64.encode(bytes));
 
                         let dto = MediaPropsDto {
                             title: session_model
@@ -485,7 +486,7 @@ fn thumbnail_to_base64(
     let mut buf = vec![0u8; size as usize];
     reader.ReadBytes(&mut buf).ok()?;
 
-    Some(base64::encode(buf))
+    Some(BASE64.encode(buf))
 }
 
 fn main() {
