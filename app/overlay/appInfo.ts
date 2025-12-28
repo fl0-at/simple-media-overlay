@@ -36,6 +36,7 @@ export const blockedAppsForPlaybackModes = [
     'brave',
     'edge',
     'opera',
+    'mediamonkey',
 ];
 
 /**
