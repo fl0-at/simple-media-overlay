@@ -28,7 +28,7 @@ If you want to actually build from the source, run this command:
 npx tauri build
 ```
 
-Alternatively, simply download either the NSIS or MSI installer from the [latest release](https://github.com/fl0-at/simple-media-overlay/releases/tag/v0.2.0).
+Alternatively, simply download either the NSIS or MSI installer from the [latest release](https://github.com/fl0-at/simple-media-overlay/releases/latest).
 
 ## Supported media playback sources
 
