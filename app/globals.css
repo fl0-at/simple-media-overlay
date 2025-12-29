@@ -24,7 +24,8 @@
 }
 
 @keyframes marquee-move {
-  0% { transform: translateX(0%); }
+  0% { transform: translateX(0%);}
+  5% { transform: translateX(0%);}
   100% { transform: translateX(-100%); }
 }
 

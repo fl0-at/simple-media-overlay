@@ -62,8 +62,6 @@ export interface PlayerInfo {
 export function getPlayerInfo(sourceAppId: string | null): PlayerInfo {
   const id = normalizeAppId(sourceAppId);
 
-  //console.log(id);
-
   if (!id) return { name: 'Unknown App', imageSrc: '/Generic.svg' };
 
   if (id.includes('applemusic') || id.includes('apple.music'))

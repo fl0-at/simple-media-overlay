@@ -2,6 +2,8 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use gsmtc::{ManagerEvent, SessionManager, SessionUpdateEvent};
@@ -100,6 +102,8 @@ struct MediaState {
     props: Mutex<Option<MediaPropsDto>>,
     // last full snapshot from GSMTC (for polling)
     snapshot: Mutex<Option<MediaSnapshotDto>>,
+    // Cache of base64-encoded thumbnails keyed by (source_app_id|title|album_title)
+    thumbnail_cache: StdMutex<HashMap<String, String>>,
 }
 
 #[tauri::command]
@@ -122,6 +126,7 @@ fn map_repeat_mode_enum(mode: MediaPlaybackAutoRepeatMode) -> RepeatMode {
 // Build a full snapshot from a GSMTC session (polling path).
 fn snapshot_from_session(
     session: &GlobalSystemMediaTransportControlsSession,
+    cache: Option<&StdMutex<HashMap<String, String>>>,
 ) -> Result<MediaSnapshotDto, String> {
     // Media properties (async -> get)
     let media_props_op = session
@@ -160,8 +165,6 @@ fn snapshot_from_session(
 
     let album_title = media_props.AlbumTitle().ok().map(|s| s.to_string());
 
-    let album_image = thumbnail_to_base64(&media_props);
-
     let position_ms = timeline.Position().ok().map(|t| t.Duration / 10_000); // 100 ns -> ms
     let duration_ms = timeline.EndTime().ok().map(|t| t.Duration / 10_000);
 
@@ -181,6 +184,29 @@ fn snapshot_from_session(
         .map(map_repeat_mode_enum);
 
     let source_app_id = session.SourceAppUserModelId().ok().map(|s| s.to_string());
+
+    // Build cache key and fetch/encode thumbnail accordingly
+    let cache_key = format!(
+        "{}|{}|{}",
+        source_app_id.as_deref().unwrap_or("") ,
+        title,
+        album_title.as_deref().unwrap_or("")
+    );
+
+    let album_image = if let Some(cache_mutex) = cache {
+        let mut guard = cache_mutex.lock().map_err(|_| "thumbnail_cache lock poisoned")?;
+        if let Some(cached) = guard.get(&cache_key).cloned() {
+            Some(cached)
+        } else {
+            let encoded = thumbnail_to_base64(&media_props);
+            if let Some(ref img) = encoded {
+                guard.insert(cache_key, img.clone());
+            }
+            encoded
+        }
+    } else {
+        thumbnail_to_base64(&media_props)
+    };
 
     Ok(MediaSnapshotDto {
         props: MediaPropsDto {
@@ -230,7 +256,7 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
             }
         };
 
-        let snap = match snapshot_from_session(&session) {
+        let snap = match snapshot_from_session(&session, Some(&state.thumbnail_cache)) {
             Ok(s) => s,
             Err(e) => {
                 log::debug!("snapshot_from_session failed: {}", e);
@@ -239,13 +265,15 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
             }
         };
 
-        let mut guard = state.snapshot.lock().await;
-        if guard.as_ref() != Some(&snap) {
-            *guard = Some(snap.clone());
-            {
-                let mut props_guard = state.props.lock().await;
-                *props_guard = Some(snap.props.clone());
-            }
+        let mut snapshot_guard = state.snapshot.lock().await;
+        if snapshot_guard.as_ref() != Some(&snap) {
+            *snapshot_guard = Some(snap.clone());
+            drop(snapshot_guard); // Release snapshot lock before acquiring props lock
+            
+            let mut props_guard = state.props.lock().await;
+            *props_guard = Some(snap.props.clone());
+            drop(props_guard); // Release props lock before emitting
+            
             let _ = app.emit("media_snapshot", snap);
         }
 
@@ -447,16 +475,15 @@ async fn refresh_media_snapshot(
         .GetCurrentSession()
         .map_err(|e| format!("GetCurrentSession failed: {e:?}"))?;
 
-    let snap = snapshot_from_session(&session)?;
+    let snap = snapshot_from_session(&session, Some(&state.thumbnail_cache))?;
 
-    {
-        let mut guard = state.snapshot.lock().await;
-        *guard = Some(snap.clone());
-    }
-    {
-        let mut props_guard = state.props.lock().await;
-        *props_guard = Some(snap.props.clone());
-    }
+    let mut snapshot_guard = state.snapshot.lock().await;
+    *snapshot_guard = Some(snap.clone());
+    drop(snapshot_guard);
+    
+    let mut props_guard = state.props.lock().await;
+    *props_guard = Some(snap.props.clone());
+    drop(props_guard);
 
     let _ = app.emit("media_snapshot", snap);
     Ok(())

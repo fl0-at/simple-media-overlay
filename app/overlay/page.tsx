@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useEffect, useState, useRef, MouseEvent } from 'react';
+import { useEffect, useState, useRef, MouseEvent, useMemo } from 'react';
 import { useMediaInfo } from '@/app/hooks/useMediaInfo';
 import { AlbumArt } from './AlbumArt';
 import { MediaInfo } from './MediaInfo';
@@ -60,9 +60,6 @@ async function sendSeek(positionMs: number) {
 
 export default function OverlayPage() {
   const media = useMediaInfo();
-  useEffect(() => {
-    console.log('OverlayPage mounted');
-  }, []);
 
   const [snapshot, setSnapshot] = useState<MediaSnapshotDto | null>(null);
   const [playElapsedMs, setPlayElapsedMs] = useState(0);
@@ -106,9 +103,15 @@ export default function OverlayPage() {
 
     return () => {
       cancelAnimationFrame(frameId);
-      setPlayElapsedMs(0);
     };
   }, [snapshot?.is_playing, snapshot?.duration_ms]);
+
+  // Align client-side elapsed with backend snapshots to avoid jumps on pause/resume
+  useEffect(() => {
+    // Whenever the backend position or playing state updates, reset the local elapsed
+    // so effectivePositionMs = basePositionMs + elapsedSinceLastSnapshot
+    setPlayElapsedMs(0);
+  }, [snapshot?.position_ms, snapshot?.is_playing, snapshot?.source_app_id]);
 
   const hasSnapshotTitle = !!snapshot?.props?.title;
   const hasMediaTitle = !!media?.title;
@@ -120,13 +123,22 @@ export default function OverlayPage() {
 
   useEffect(() => {
     const current = snapshot?.source_app_id ?? null;
-    if (lastSourceAppIdRef.current !== current) {
-      console.log('source_app_id changed:', current);
+    if (lastSourceAppIdRef.current !== current && lastSourceAppIdRef.current !== null) {
+      // App switched - force a refresh to get updated snapshot from new app
+      invoke('refresh_media_snapshot').catch((e) =>
+        console.error('refresh_media_snapshot failed on app switch', e)
+      );
+      lastSourceAppIdRef.current = current;
+    } else if (lastSourceAppIdRef.current === null) {
+      // First initialization
       lastSourceAppIdRef.current = current;
     }
   }, [snapshot?.source_app_id]);
 
-  const effectiveTitle = snapshot?.props?.title || media?.title;
+  const effectiveTitle = useMemo(
+    () => snapshot?.props?.title || media?.title,
+    [snapshot?.props?.title, media?.title]
+  );
 
   // Track last title to clear stale artist/album when switching songs
   const [lastTitle, setLastTitle] = useState<string | undefined>(undefined);
@@ -137,8 +149,14 @@ export default function OverlayPage() {
 
   // Only use media fallback if title hasn't changed (same song); otherwise use snapshot values only
   const shouldUseFallback = effectiveTitle === lastTitle;
-  const effectiveArtist = snapshot?.props?.artist || (shouldUseFallback ? media?.artist : '');
-  const effectiveAlbumTitle = snapshot?.props?.album_title ?? (shouldUseFallback ? media?.album_title : null) ?? null;
+  const effectiveArtist = useMemo(
+    () => snapshot?.props?.artist || (shouldUseFallback ? media?.artist : ''),
+    [snapshot?.props?.artist, shouldUseFallback, media?.artist]
+  );
+  const effectiveAlbumTitle = useMemo(
+    () => snapshot?.props?.album_title ?? (shouldUseFallback ? media?.album_title : null) ?? null,
+    [snapshot?.props?.album_title, shouldUseFallback, media?.album_title]
+  );
 
   // Title scrolling
   const titleContainerRef = useRef<HTMLDivElement | null>(null);
@@ -148,6 +166,7 @@ export default function OverlayPage() {
   const animationStartTimerRef = useRef<number | null>(null);
   const animationPauseTimerRef = useRef<number | null>(null);
   const animationListenerRef = useRef<((e: AnimationEvent) => void) | null>(null);
+  const titleHasPlayedRef = useRef<boolean>(false);
 
   useEffect(() => {
     const container = titleContainerRef.current;
@@ -199,14 +218,18 @@ export default function OverlayPage() {
           const distance = measuredInnerWidth + usedContainerWidth;
           const speed = 60;
           const travelSeconds = distance / speed;
-          const initialDelay = 2;
-          const pauseBetween = 1.5;
+          const initialDelay = 0;  // 2
+          const pauseBetween = 0; // 1.5
 
           const fadeOutDuration = 2;
           const fadeOutStartPercent = ((travelSeconds - fadeOutDuration) / travelSeconds) * 100;
 
           const keyframesId = `marquee-fade-${Math.random().toString(36).substr(2, 9)}`;
-          const keyframesCSS = `@keyframes ${keyframesId} { 0% { opacity: 1; } ${fadeOutStartPercent.toFixed(2)}% { opacity: 1; } 100% { opacity: 0; } }`;
+          const keyframesCSS = `@keyframes ${keyframesId} { 0% { opacity: 0; } 5% { opacity: 1; } ${fadeOutStartPercent.toFixed(2)}% { opacity: 1; } 100% { opacity: 0; } }`;
+          
+          // First-run keyframes: start at full opacity, only fade-out at end
+          const firstRunKeyframesId = `marquee-fade-first-${Math.random().toString(36).substr(2, 9)}`;
+          const firstRunKeyframesCSS = `@keyframes ${firstRunKeyframesId} { 0% { opacity: 1; } ${fadeOutStartPercent.toFixed(2)}% { opacity: 1; } 100% { opacity: 0; } }`;
 
           const globalState = globalThis as { marqueeStyleSheet?: HTMLStyleElement };
           if (!globalState.marqueeStyleSheet) {
@@ -214,12 +237,13 @@ export default function OverlayPage() {
             document.head.appendChild(sheet);
             globalState.marqueeStyleSheet = sheet;
           }
-          globalState.marqueeStyleSheet.textContent += keyframesCSS;
+          globalState.marqueeStyleSheet.textContent += keyframesCSS + firstRunKeyframesCSS;
 
           setTitleMarqueeConfig({ isActive: true, duration: travelSeconds, delay: initialDelay, fadeKeyframes: keyframesId });
           try {
             (inner as HTMLElement).dataset.marqueePause = String(pauseBetween);
             (inner as HTMLElement).dataset.fadeKeyframes = keyframesId;
+            (inner as HTMLElement).dataset.fadeKeyframesFirst = firstRunKeyframesId;
           } catch {
             // ignore
           }
@@ -232,7 +256,6 @@ export default function OverlayPage() {
     check();
     const resizeObserver = new ResizeObserver(check);
     resizeObserver.observe(container);
-    resizeObserver.observe(inner);
     window.addEventListener('resize', check);
     return () => {
       resizeObserver.disconnect();
@@ -243,6 +266,8 @@ export default function OverlayPage() {
   useEffect(() => {
     const inner = titleInnerRef.current;
     if (!inner) return;
+
+    titleHasPlayedRef.current = false;
 
     const clearTimers = () => {
       if (animationStartTimerRef.current) {
@@ -260,16 +285,38 @@ export default function OverlayPage() {
     const onEnd = () => {
       inner.style.removeProperty('animation');
       inner.style.removeProperty('transform');
+      // Keep opacity at 0 to prevent flash before next animation
+      inner.style.opacity = '0';
       clearTimers();
+
+      titleHasPlayedRef.current = true;
 
       const pauseMs = Math.round(pauseBetween * 1000);
 
       animationStartTimerRef.current = window.setTimeout(() => {
         const fadeKeyframes = (inner as HTMLElement).dataset.fadeKeyframes;
+        const fadeKeyframesFirst = (inner as HTMLElement).dataset.fadeKeyframesFirst;
+        const shouldFade = fadeKeyframes && titleHasPlayedRef.current;
+
         if (fadeKeyframes) {
-          const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframes} var(--marquee-travel) ease-in-out`;
-          inner.style.animation = animationValue;
-          inner.style.animationIterationCount = '1';
+          if (shouldFade) {
+            inner.style.opacity = '0';
+            requestAnimationFrame(() => {
+              const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframes} var(--marquee-travel) ease-in-out`;
+              inner.style.animation = animationValue;
+              inner.style.animationIterationCount = '1';
+              inner.style.animationFillMode = 'both, both';
+            });
+          } else if (fadeKeyframesFirst) {
+            // First run: use first-run keyframes (no fade-in, only fade-out)
+            inner.style.removeProperty('opacity');
+            requestAnimationFrame(() => {
+              const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframesFirst} var(--marquee-travel) ease-in-out`;
+              inner.style.animation = animationValue;
+              inner.style.animationIterationCount = '1';
+              inner.style.animationFillMode = 'both, both';
+            });
+          }
         }
       }, pauseMs);
     };
@@ -279,21 +326,42 @@ export default function OverlayPage() {
 
     clearTimers();
     inner.style.removeProperty('animation');
+    inner.style.removeProperty('animation-fill-mode');
+    inner.style.removeProperty('animation-iteration-count');
     inner.style.removeProperty('transform');
     inner.style.removeProperty('--marquee-travel');
+    inner.style.removeProperty('opacity');
 
     if (titleMarqueeConfig.isActive) {
       inner.style.setProperty('--marquee-travel', `${titleMarqueeConfig.duration}s`);
       const delayMs = Math.round(titleMarqueeConfig.delay * 1000);
       animationStartTimerRef.current = window.setTimeout(() => {
         const fadeKeyframes = titleMarqueeConfig.fadeKeyframes;
+        const fadeKeyframesFirst = (inner as HTMLElement).dataset.fadeKeyframesFirst;
+        const shouldFade = fadeKeyframes && titleHasPlayedRef.current;
+
         if (fadeKeyframes) {
-          const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframes} var(--marquee-travel) ease-in-out`;
-          inner.style.animation = animationValue;
-          inner.style.animationIterationCount = '1';
+          if (shouldFade) {
+            inner.style.opacity = '0';
+            requestAnimationFrame(() => {
+              const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframes} var(--marquee-travel) ease-in-out`;
+              inner.style.animation = animationValue;
+              inner.style.animationIterationCount = '1';
+              inner.style.animationFillMode = 'both, both';
+              const _forceReflow = inner.offsetWidth;
+            });
+          } else if (fadeKeyframesFirst) {
+            // First run: use first-run keyframes (no fade-in, only fade-out)
+            inner.style.removeProperty('opacity');
+            requestAnimationFrame(() => {
+              const animationValue = `marquee-move var(--marquee-travel) linear, ${fadeKeyframesFirst} var(--marquee-travel) ease-in-out`;
+              inner.style.animation = animationValue;
+              inner.style.animationIterationCount = '1';
+              inner.style.animationFillMode = 'both, both';
+              const _forceReflow = inner.offsetWidth;
+            });
+          }
         }
-        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-        inner.offsetWidth;
       }, delayMs);
     }
 
@@ -304,6 +372,9 @@ export default function OverlayPage() {
       inner.style.removeProperty('transform');
       inner.style.removeProperty('animation');
       inner.style.removeProperty('animation-iteration-count');
+      inner.style.removeProperty('animation-fill-mode');
+      inner.style.removeProperty('opacity');
+      titleHasPlayedRef.current = false;
     };
   }, [titleMarqueeConfig.isActive, titleMarqueeConfig.duration, titleMarqueeConfig.delay, titleMarqueeConfig.fadeKeyframes, effectiveTitle]);
 
@@ -315,7 +386,7 @@ export default function OverlayPage() {
     ? `data:image/png;base64,${media.album_image}`
     : null;
 
-  const imageSrc = snapshotImage || mediaImage;
+  const imageSrc = snapshotImage || (shouldUseFallback ? mediaImage : null);
 
   const durationMs = snapshot?.duration_ms ?? null;
   const basePositionMs = snapshot?.position_ms ?? null;
@@ -394,8 +465,8 @@ export default function OverlayPage() {
         <>
           <AlbumArt imageSrc={imageSrc} albumTitle={effectiveAlbumTitle} pinned={pinned} sourceAppId={sourceAppId} />
           <div
-            className="flex flex-col content-center justify-center w-70 h-32"
-            style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
+            className="flex flex-col content-center justify-center shrink-0"
+            style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag', width: '276px', height: '128px' } as never}
           >
             <div className="flex flex-row w-full">
               <MediaInfo

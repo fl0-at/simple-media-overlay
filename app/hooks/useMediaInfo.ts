@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
 
 export type MediaProps = {
   title: string;
@@ -16,8 +15,6 @@ export function useMediaInfo() {
   const [media, setMedia] = useState<MediaProps | null>(null);
 
   useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
-
     (async () => {
       try {
         await invoke('start_media_listener');
@@ -31,17 +28,7 @@ export function useMediaInfo() {
       } catch (err) {
         console.error('get_current_media failed', err);
       }
-
-      unlisten = await listen<MediaProps>('media_update', (event) => {
-        setMedia(event.payload);
-      });
     })();
-
-    return () => {
-      if (unlisten) {
-        unlisten();
-      }
-    };
   }, []);
 
   return media;
