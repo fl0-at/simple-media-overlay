@@ -386,7 +386,9 @@ export default function OverlayPage() {
     ? `data:image/png;base64,${media.album_image}`
     : null;
 
-  const imageSrc = snapshotImage || (shouldUseFallback ? mediaImage : null);
+  // Only use mediaImage if we're on the same track AND have no snapshot image
+  // This prevents showing the previous track's album art
+  const imageSrc = snapshotImage || (shouldUseFallback && effectiveTitle === media?.title ? mediaImage : null);
 
   const durationMs = snapshot?.duration_ms ?? null;
   const basePositionMs = snapshot?.position_ms ?? null;

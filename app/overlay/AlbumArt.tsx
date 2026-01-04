@@ -21,6 +21,7 @@ export function AlbumArt({ imageSrc, albumTitle, pinned, sourceAppId }: AlbumArt
             <div className="w-24 h-24 shrink-0" style={{ aspectRatio: '1/1' }}>
                 {imageSrc ? (
                     <StyledImage
+                        key={imageSrc}
                         src={imageSrc}
                         alt={albumTitle || 'Album Art'}
                         className="w-full h-full rounded-md object-cover"
@@ -31,6 +32,7 @@ export function AlbumArt({ imageSrc, albumTitle, pinned, sourceAppId }: AlbumArt
                     />
                 ) : (
                     <StyledImage
+                        key="no-art"
                         src={'/Generic.svg'}
                         alt={'No Album Art'}
                         className="w-full h-full rounded-md object-cover bg-white/5"
