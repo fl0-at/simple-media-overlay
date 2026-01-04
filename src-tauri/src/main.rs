@@ -9,6 +9,7 @@ use std::time::Duration;
 use gsmtc::{ManagerEvent, SessionManager, SessionUpdateEvent};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
 use tokio::time::sleep;
 
@@ -529,6 +530,55 @@ fn main() {
             refresh_media_snapshot
         ])
         .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                check_for_updates(handle).await;
+            });
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+async fn check_for_updates(app: AppHandle) {
+    match app.updater().ok() {
+        Some(updater) => {
+            match updater.check().await {
+                Ok(Some(update)) => {
+                    log::info!("Update available: {}", update.version);
+                    
+                    // Emit event to frontend to notify user
+                    let _ = app.emit("update-available", update.version.clone());
+                    
+                    // Download and install the update
+                    match update.download_and_install(|_chunk_length, _content_length| {
+                        // Progress callback - could emit progress events here
+                    }, || {
+                        // Download completed callback
+                        log::info!("Update downloaded, will install on app restart");
+                    }).await {
+                        Ok(_) => {
+                            log::info!("Update ready to install");
+                            let _ = app.emit("update-downloaded", update.version);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to download update: {}", e);
+                            let _ = app.emit("update-error", format!("{}", e));
+                        }
+                    }
+                }
+                Ok(None) => {
+                    log::info!("No updates available");
+                }
+                Err(e) => {
+                    log::warn!("Failed to check for updates: {}", e);
+                }
+            }
+        }
+        None => {
+            log::warn!("Updater not available");
+        }
+    }
 }

@@ -1,0 +1,100 @@
+name: Auto Version Bump
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '.github/**'
+      - 'README.md'
+      - '.gitignore'
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get current version
+        id: get-version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "current_version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Determine version bump type
+        id: bump-type
+        run: |
+          # Check commit message for version bump indicators
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          
+          if [[ "$COMMIT_MSG" =~ \[major\] ]] || [[ "$COMMIT_MSG" =~ BREAKING\ CHANGE ]]; then
+            echo "type=major" >> $GITHUB_OUTPUT
+          elif [[ "$COMMIT_MSG" =~ \[minor\] ]] || [[ "$COMMIT_MSG" =~ feat: ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          else
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Bump version
+        id: bump
+        run: |
+          IFS='.' read -r major minor patch <<< "${{ steps.get-version.outputs.current_version }}"
+          
+          if [ "${{ steps.bump-type.outputs.type }}" == "major" ]; then
+            major=$((major + 1))
+            minor=0
+            patch=0
+          elif [ "${{ steps.bump-type.outputs.type }}" == "minor" ]; then
+            minor=$((minor + 1))
+            patch=0
+          else
+            patch=$((patch + 1))
+          fi
+          
+          NEW_VERSION="$major.$minor.$patch"
+          
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "bump_type=${{ steps.bump-type.outputs.type }}" >> $GITHUB_OUTPUT
+          echo "New ${{ steps.bump-type.outputs.type }} version: $NEW_VERSION"
+
+      - name: Update package.json
+        run: |
+          npm version ${{ steps.bump.outputs.new_version }} --no-git-tag-version
+
+      - name: Update tauri.conf.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = './src-tauri/tauri.conf.json';
+            const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+            config.version = '${{ steps.bump.outputs.new_version }}';
+            fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
+          "
+
+      - name: Update Cargo.toml
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ steps.bump.outputs.new_version }}"/' src-tauri/Cargo.toml
+
+      - name: Commit and tag
+        run: |
+          git add package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
+          git tag "v${{ steps.bump.outputs.new_version }}"
+          git push origin HEAD --tags

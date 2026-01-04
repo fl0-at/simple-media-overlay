@@ -9,6 +9,7 @@ import { MediaInfo } from './MediaInfo';
 import { MediaTimeline } from './MediaTimeline';
 import { MediaControls } from './MediaControls';
 import { PinButton } from './PinButton';
+import UpdateNotification from './UpdateNotification';
 
 type RepeatMode = 'none' | 'track' | 'list';
 
@@ -514,6 +515,7 @@ export default function OverlayPage() {
           </div>
         </div>
       )}
+      <UpdateNotification />
     </div>
   );
 }

@@ -38,6 +38,17 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "fl0-at"
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/fl0-at/simple-media-overlay/releases/latest/download/latest.json"
+      ],
+      "dialog": false,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkxOTExM0JGMkZFMTA5QzUKUldURkNlRXZ2eE9Sa1cvR04xaGQ2VjFrdDNDWWdad0E5cVhTOXhuZ2cwS3YyOFlpTGY1ZkxmbEsK"
+    }
   }
 }
