@@ -12,6 +12,19 @@
   "app": {
     "windows": [
       {
+        "label": "splashscreen",
+        "title": "Simple Media Overlay",
+        "width": 128,
+        "height": 128,
+        "center": true,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "transparent": true,
+        "visible": false,
+        "url": "splashscreen.html"
+      },
+      {
         "label": "main",
         "title": "Simple Media Overlay",
         "transparent": true,
@@ -19,7 +32,7 @@
         "alwaysOnTop": true,
         "resizable": false,
         "fullscreen": false,
-        "visible": true,
+        "visible": false,
         "width": 408,
         "height": 128,
         "center": true

@@ -19,6 +19,45 @@ use windows::Media::Control::{
 };
 use windows::Media::MediaPlaybackAutoRepeatMode;
 
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::{WM_CONTEXTMENU, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_SYSCOMMAND, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SC_SIZE, DefWindowProcW, SetWindowLongPtrW, CallWindowProcW, GWLP_WNDPROC, GetWindowLongPtrW, GWL_STYLE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, GetSystemMenu, DeleteMenu, MF_BYCOMMAND};
+
+#[cfg(target_os = "windows")]
+static mut OLD_WNDPROC: Option<isize> = None;
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // Block the context menu and all right-click related messages
+    match msg {
+        WM_CONTEXTMENU | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_NCRBUTTONDOWN | WM_NCRBUTTONUP => {
+            return LRESULT(0);
+        }
+        WM_SYSCOMMAND => {
+            // Block maximize, minimize, restore, and size commands
+            let cmd = wparam.0 & 0xFFF0;
+            if cmd == SC_MAXIMIZE as usize || cmd == SC_MINIMIZE as usize || cmd == SC_RESTORE as usize || cmd == SC_SIZE as usize {
+                return LRESULT(0);
+            }
+        }
+        _ => {}
+    }
+    
+    // Call the original window procedure for all other messages
+    if let Some(old_proc) = OLD_WNDPROC {
+        CallWindowProcW(
+            Some(std::mem::transmute(old_proc)),
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+        )
+    } else {
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 enum RepeatMode {
@@ -692,6 +731,70 @@ fn main() {
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::Manager;
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                
+                // Show splash screen immediately
+                if let Some(splash) = app.get_webview_window("splashscreen") {
+                    splash.show().ok();
+                }
+                
+                if let Some(window) = app.get_webview_window("main") {
+                    // Get both window and webview HWNDs to disable context menu
+                    if let Ok(handle) = window.window_handle() {
+                        if let RawWindowHandle::Win32(win_handle) = handle.as_raw() {
+                            unsafe {
+                                let hwnd = HWND(win_handle.hwnd.get() as _);
+                                
+                                // Remove maximize and minimize from window style
+                                let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                                let new_style = style & !(WS_MAXIMIZEBOX.0 as isize) & !(WS_MINIMIZEBOX.0 as isize);
+                                SetWindowLongPtrW(hwnd, GWL_STYLE, new_style);
+                                
+                                // Remove items from system menu
+                                let hmenu = GetSystemMenu(hwnd, false);
+                                if !hmenu.is_invalid() {
+                                    DeleteMenu(hmenu, SC_MAXIMIZE, MF_BYCOMMAND).ok();
+                                    DeleteMenu(hmenu, SC_MINIMIZE, MF_BYCOMMAND).ok();
+                                    DeleteMenu(hmenu, SC_RESTORE, MF_BYCOMMAND).ok();
+                                    DeleteMenu(hmenu, SC_SIZE, MF_BYCOMMAND).ok();
+                                }
+                                
+                                // Subclass the window to intercept WM_CONTEXTMENU
+                                let old_proc = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, custom_wndproc as isize);
+                                OLD_WNDPROC = Some(old_proc);
+                                
+                                log::info!("Window subclassed to disable context menu - HWND: {:?}", hwnd);
+                            }
+                        }
+                    }
+                    
+                    // Show main window after 1 second and close splash screen
+                    let window_clone = window.clone();
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        sleep(Duration::from_secs(1)).await;
+                        window_clone.show().ok();
+                        if let Some(splash) = app_handle.get_webview_window("splashscreen") {
+                            splash.close().ok();
+                        }
+                    });
+                }
+            }
+            
+            #[cfg(not(target_os = "windows"))]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    window.show().ok();
+                    if let Some(splash) = app.get_webview_window("splashscreen") {
+                        splash.close().ok();
+                    }
+                }
+            }
+            
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 check_for_updates(handle).await;
