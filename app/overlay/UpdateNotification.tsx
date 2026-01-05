@@ -20,14 +20,16 @@ export default function UpdateNotification({ onDismiss }: UpdateNotificationProp
   const [error, setError] = useState<string>('');
   const [justUpdated, setJustUpdated] = useState(false);
   const [previousVersion, setPreviousVersion] = useState<string>('');
+  const [currentVersion, setCurrentVersion] = useState<string>('');
 
   useEffect(() => {
     // Check if app was just updated
     const checkIfUpdated = async () => {
-      const currentVersion = await getVersion();
+      const version = await getVersion();
+      setCurrentVersion(version);
       const lastVersion = localStorage.getItem('app-version');
       
-      if (lastVersion && lastVersion !== currentVersion) {
+      if (lastVersion && lastVersion !== version) {
         // App was updated!
         setPreviousVersion(lastVersion);
         setJustUpdated(true);
@@ -39,7 +41,7 @@ export default function UpdateNotification({ onDismiss }: UpdateNotificationProp
       }
       
       // Store current version
-      localStorage.setItem('app-version', currentVersion);
+      localStorage.setItem('app-version', version);
     };
 
     checkIfUpdated();
@@ -81,7 +83,7 @@ export default function UpdateNotification({ onDismiss }: UpdateNotificationProp
           <div>
             <p className="font-semibold">🎉 Successfully Updated!</p>
             <p className="text-sm opacity-90">
-              Simple Media Overlay has been updated from v{previousVersion} to v{updateInfo?.version || 'latest'}.
+              Simple Media Overlay has been updated from v{previousVersion} to v{currentVersion}.
             </p>
           </div>
           <button
