@@ -37,6 +37,7 @@ export const blockedAppsForPlaybackModes = [
     'edge',
     'opera',
     'vivaldi',
+    'safari',
     'mediamonkey',
 ];
 
