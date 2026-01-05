@@ -161,29 +161,43 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build the app
-        uses: tauri-apps/tauri-action@v0
+      - name: Build the app with signing
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: ${{ matrix.args }}
+        run: npm run tauri build -- ${{ matrix.args }}
+
+      - name: Upload MSI to release
+        run: |
+          $msiPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${{ needs.create-release.outputs.tag_name }}".TrimStart('v') + "_x64_en-US.msi"
+          gh release upload ${{ needs.create-release.outputs.tag_name }} $msiPath --clobber
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload MSI signature to release
+        run: |
+          $sigPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${{ needs.create-release.outputs.tag_name }}".TrimStart('v') + "_x64_en-US.msi.sig"
+          if (Test-Path $sigPath) {
+            gh release upload ${{ needs.create-release.outputs.tag_name }} $sigPath --clobber
+          } else {
+            Write-Host "WARNING: Signature file not found at $sigPath"
+          }
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create and upload updater JSON
         run: |
           $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
           $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.tag_name }}/simple-media-overlay_${version}_x64_en-US.msi"
+          $sigPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi.sig"
           
-          Write-Host "Looking for signature file..."
-          $sigFile = Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "*.msi.sig" -ErrorAction SilentlyContinue | Select-Object -First 1
+          Write-Host "Looking for signature file at: $sigPath"
           
-          if ($sigFile) {
-            Write-Host "Found signature file: $($sigFile.FullName)"
-            $sigContent = Get-Content $sigFile.FullName -Raw
+          if (Test-Path $sigPath) {
+            Write-Host "Found signature file!"
+            $signature = Get-Content $sigPath -Raw
             
             $json = @{
               version = $version
@@ -191,25 +205,17 @@ jobs:
               pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
               platforms = @{
                 "windows-x86_64" = @{
-                  signature = $sigContent.Trim()
+                  signature = $signature.Trim()
                   url = $msiUrl
                 }
               }
             } | ConvertTo-Json -Depth 10
           } else {
-            Write-Host "WARNING: No signature file found. Creating unsigned manifest."
-            Write-Host "Note: Tauri v2 requires signed updates for production!"
-            
-            $json = @{
-              version = $version
-              notes = "See release notes for details"
-              pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-              platforms = @{
-                "windows-x86_64" = @{
-                  url = $msiUrl
-                }
-              }
-            } | ConvertTo-Json -Depth 10
+            Write-Host "ERROR: Signature file not found!"
+            Write-Host "Tauri v2 requires signed updates. Build failed!"
+            Write-Host "Listing all .sig files in target directory:"
+            Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "*.sig" -ErrorAction SilentlyContinue
+            exit 1
           }
           
           $json | Out-File -FilePath "latest.json" -Encoding utf8
