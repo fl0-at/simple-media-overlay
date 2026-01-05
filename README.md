@@ -6,6 +6,17 @@ I wanted to build a simple media overlay app that stays on top, so I vibe-coded 
 
 ![Simple Media Overlay](./assets/SimpleMediaOverlay.png)
 
+## Prerequisites
+
+- **Windows 10 or Windows 11** - This app currently only works on Windows (see [Current Limitations](#current-limitations))
+
+### Additional requirements for developers
+
+If you want to build from source or contribute to development:
+
+- **[Node.js](https://nodejs.org/)** (v18 or higher recommended)
+- **[Rust](https://www.rust-lang.org/tools/install)** and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+
 ## Features
 
 - 📻 Always-on-top overlay that displays currently playing media
@@ -13,22 +24,37 @@ I wanted to build a simple media overlay app that stays on top, so I vibe-coded 
 - 👀 Little icon in the bottom left corner of the album art, showing the source of the currently playing media
 - ⏯️ Play/Pause, Skip to next or previous track or use the seek bar to skip to a certain part of the currently playing media
 - ℹ️ Auto-scrolling for longer titles
+- ✨ Fancy animations when the currently played media changes, is played/paused or the overlay is pinned
 
 ## Running the overlay
 
-Run this command to launch the overlay in dev mode:
+### For end users
 
-```bash
-npx tauri dev
-```
+Simply download either the NSIS or MSI installer from the [latest release](https://github.com/fl0-at/simple-media-overlay/releases/latest).
 
-If you want to actually build from the source, run this command:
+The app includes automatic update notifications - you'll be notified when a new version is available!
 
-```bash
-npx tauri build
-```
+### For developers
 
-Alternatively, simply download either the NSIS or MSI installer from the [latest release](https://github.com/fl0-at/simple-media-overlay/releases/latest).
+1. **Install dependencies:**
+
+   ```bash
+   npm install
+   ```
+
+2. **Run in development mode:**
+
+   ```bash
+   npx tauri dev
+   ```
+
+3. **Build from source:**
+
+   ```bash
+   npx tauri build
+   ```
+
+Make sure you have [Rust](https://www.rust-lang.org/tools/install) and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) installed before building.
 
 ## Supported media playback sources
 
@@ -43,17 +69,22 @@ Any media player or application that publishes metadata about the currently play
 - 🌊 Tidal Desktop Client
 - 🚧 Videolan VLC (UWP App only as of now)
 - 🐒 MediaMonkey 2024
+
 - 🪟 Windows 11 default media player
 
 For the following apps, I have not tested, but they should have their own icons:
 
 - 🍎 Apple Music
 - 🎧 Apple Podcasts
+- 👽 Foobar2000
+- 🎵 iTunes
 - 🧭 Safari Browser
 - ▶️ Groove Media Player
+- 🎬 Media Player Classic
 - 🛜 Spotify
+- ⚡ Winamp
 
-_I also added Kodi, but later found out it does not actually publish any media metadata via GSMTC APIs, and I can confirm that the overlay will not display media that is played via Kodi._
+_I also added Kodi & KMPlayer, but later found out they do not actually publish any media metadata via GSMTC APIs, and I can confirm that the overlay will not display media that is played via these apps._
 
 **If you want me to add a specific media player/app icon, please [open a new issue](https://github.com/fl0-at/simple-media-overlay/issues/new)!**
 
@@ -67,7 +98,49 @@ For some reason, the shuffle and repeat functionality don't seem to work when pl
 - 🦁 Brave Browser
 - ⭕ Opera Browser
 - 🎻 Vivaldi Browser
+- 🧭 Safari Browser
 - 🌊 Tidal Desktop Client
 - 🐒 MediaMonkey 2024
 
-_Since this app is currently based around the [win-gsmtc](https://docs.rs/win-gsmtc/latest/gsmtc/) crate, please don't expect me to add support for other OSes - I might switch to another cross-platform crate later_ 🙂
+### Windows-only support
+
+This app is **currently Windows-only** because it relies on the [win-gsmtc](https://docs.rs/win-gsmtc/latest/gsmtc/) crate to access Windows' Global System Media Transport Controls (GSMTC) APIs. This is the same system that powers the media controls in Windows 11's Quick Settings and lock screen.
+
+I might switch to a cross-platform crate in the future to support macOS and Linux, but for now, Windows 10/11 is required. 🙂
+
+## Troubleshooting
+
+**Media not showing up?**
+
+- Make sure your media player publishes to Windows GSMTC (most modern apps do)
+- Try playing/pausing the media once to trigger the overlay update
+- Check that the app is running
+
+**Overlay not staying on top?**
+
+- Restart the application
+- Some fullscreen apps may override the always-on-top behavior
+
+**Can't move the overlay?**
+
+- Click the pin button to unpin it first
+
+For other issues, please [open an issue](https://github.com/fl0-at/simple-media-overlay/issues/new) on GitHub.
+
+## Contributing
+
+Contributions are welcome! If you'd like to add support for a new media player icon or fix a bug:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/my-feature`)
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+**For media player icon requests, please [open an issue](https://github.com/fl0-at/simple-media-overlay/issues/new) first.**
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+**Note on Third-Party Icons:** This software includes icons and logos of third-party media players solely for the purpose of identifying the source of currently playing media. All trademarks, logos, and brand names are the property of their respective owners. The use of these marks does not imply endorsement and does not grant any rights to use these trademarks outside the context of this software. See the [LICENSE](LICENSE) file for complete trademark notices.
