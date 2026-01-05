@@ -36,6 +36,7 @@ export const blockedAppsForPlaybackModes = [
     'brave',
     'edge',
     'opera',
+    'vivaldi',
     'mediamonkey',
 ];
 
@@ -76,6 +77,7 @@ export function getPlayerInfo(sourceAppId: string | null): PlayerInfo {
   if (id.includes('kodi')) return { name: 'Kodi', imageSrc: '/Kodi.svg' };
   if (id.includes('mediamonkey')) return { name: 'MediaMonkey', imageSrc: '/MediaMonkey.png' };
   if (id.includes('opera')) return { name: 'Opera', imageSrc: '/Opera.svg' };
+  if (id.includes('vivaldi')) return { name: 'Vivaldi', imageSrc: '/Vivaldi.svg' };
   if (id.includes('safari')) return { name: 'Safari', imageSrc: '/Safari.svg' };
   if (id.includes('spotify')) return { name: 'Spotify', imageSrc: '/Spotify.svg' };
   if (id.includes('tidal')) return { name: 'TIDAL', imageSrc: '/Tidal.png' };

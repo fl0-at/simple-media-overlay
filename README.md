@@ -39,6 +39,7 @@ Any media player or application that publishes metadata about the currently play
 - 🦊 Mozilla Firefox
 - 🦁 Brave Browser
 - ⭕ Opera Browser
+- 🎻 Vivaldi Browser
 - 🌊 Tidal Desktop Client
 - 🚧 Videolan VLC (UWP App only as of now)
 - 🐒 MediaMonkey 2024
@@ -65,6 +66,7 @@ For some reason, the shuffle and repeat functionality don't seem to work when pl
 - 🦊 Mozilla Firefox
 - 🦁 Brave Browser
 - ⭕ Opera Browser
+- 🎻 Vivaldi Browser
 - 🌊 Tidal Desktop Client
 - 🐒 MediaMonkey 2024
 
