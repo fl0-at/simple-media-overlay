@@ -155,5 +155,35 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+      - name: Create and upload updater JSON
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/simple-media-overlay_${version}_x64_en-US.msi"
+          
+          # Get the signature file content
+          $sigContent = Get-Content "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi.sig" -Raw
+          
+          $json = @{
+            version = $version
+            notes = "See release notes for details"
+            pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $sigContent.Trim()
+                url = $msiUrl
+              }
+            }
+          } | ConvertTo-Json -Depth 10
+          
+          $json | Out-File -FilePath "latest.json" -Encoding utf8
+          
+          Write-Host "Created latest.json:"
+          Get-Content "latest.json"
+          
+          # Upload to release using GitHub CLI
+          gh release upload ${{ github.ref_name }} latest.json --clobber
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
