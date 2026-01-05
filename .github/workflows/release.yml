@@ -169,7 +169,8 @@ jobs:
 
       - name: Upload MSI to release
         run: |
-          $msiPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${{ needs.create-release.outputs.tag_name }}".TrimStart('v') + "_x64_en-US.msi"
+          $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
+          $msiPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi"
           gh release upload ${{ needs.create-release.outputs.tag_name }} $msiPath --clobber
         shell: pwsh
         env:
@@ -177,7 +178,8 @@ jobs:
       
       - name: Upload MSI signature to release
         run: |
-          $sigPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${{ needs.create-release.outputs.tag_name }}".TrimStart('v') + "_x64_en-US.msi.sig"
+          $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
+          $sigPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi.sig"
           if (Test-Path $sigPath) {
             gh release upload ${{ needs.create-release.outputs.tag_name }} $sigPath --clobber
           } else {
