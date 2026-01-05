@@ -105,6 +105,8 @@ struct MediaState {
     snapshot: Mutex<Option<MediaSnapshotDto>>,
     // Cache of base64-encoded thumbnails keyed by (source_app_id|title|album_title)
     thumbnail_cache: StdMutex<HashMap<String, String>>,
+    // Track the last title we successfully cached a thumbnail for (to detect stale fetches)
+    last_cached_title: Mutex<Option<String>>,
 }
 
 #[tauri::command]
@@ -128,7 +130,7 @@ fn map_repeat_mode_enum(mode: MediaPlaybackAutoRepeatMode) -> RepeatMode {
 fn snapshot_from_session(
     session: &GlobalSystemMediaTransportControlsSession,
     cache: Option<&StdMutex<HashMap<String, String>>>,
-) -> Result<MediaSnapshotDto, String> {
+    previous_thumbnail: Option<&String>,    previous_title: Option<&str>,) -> Result<MediaSnapshotDto, String> {
     // Media properties (async -> get)
     let media_props_op = session
         .TryGetMediaPropertiesAsync()
@@ -186,24 +188,109 @@ fn snapshot_from_session(
 
     let source_app_id = session.SourceAppUserModelId().ok().map(|s| s.to_string());
 
-    // Build cache key and fetch/encode thumbnail accordingly
-    let cache_key = format!(
-        "{}|{}|{}",
-        source_app_id.as_deref().unwrap_or("") ,
-        title,
-        album_title.as_deref().unwrap_or("")
-    );
+    // Build cache key - prioritize album title, but fall back to track title for apps like TIDAL 
+    // that don't provide album info (empty string or None)
+    let use_album_for_cache = album_title.as_ref()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    
+    let cache_key = if use_album_for_cache {
+        // Use album title for caching (all tracks on same album share art)
+        format!("{}\x1F{}", 
+            source_app_id.as_deref().unwrap_or(""),
+            album_title.as_deref().unwrap())
+    } else {
+        // Use track title for caching (each track has its own art)
+        format!("{}\x1F{}", 
+            source_app_id.as_deref().unwrap_or(""),
+            title)
+    };
 
     let album_image = if let Some(cache_mutex) = cache {
         let mut guard = cache_mutex.lock().map_err(|_| "thumbnail_cache lock poisoned")?;
         if let Some(cached) = guard.get(&cache_key).cloned() {
-            Some(cached)
+            // Even with a cache hit, verify freshness when track changes
+            // Windows GSMTC might still be returning stale data, so we need to check
+            let track_changed = previous_title.map(|prev| prev != title).unwrap_or(false);
+            
+            if track_changed {
+                // Fetch what Windows is currently providing
+                let windows_thumb = thumbnail_to_base64(&media_props);
+                
+                // Compare Windows data to cached data
+                if let Some(ref win_thumb) = windows_thumb {
+                    if win_thumb == &cached {
+                        // Windows data matches cache - cache is still fresh, use it
+                        Some(cached)
+                    } else {
+                        // Windows is providing different data
+                        // Check if Windows is providing stale data (matches previous track)
+                        let windows_is_stale = if let Some(prev_thumb) = previous_thumbnail {
+                            win_thumb == prev_thumb
+                        } else {
+                            false
+                        };
+                        
+                        if windows_is_stale {
+                            log::warn!("Windows providing stale thumbnail for '{}' (matches previous track, len: {}). Using cached version and will recheck next poll.", 
+                                title, win_thumb.len());
+                            // Windows is stale, trust the cache
+                            Some(cached)
+                        } else {
+                            // Windows has fresh, different data - update cache and use it
+                            log::warn!("Windows providing different thumbnail for '{}' than cached (win: {}, cached: {}). Updating cache with Windows version.", 
+                                title, win_thumb.len(), cached.len());
+                            guard.insert(cache_key.clone(), win_thumb.clone());
+                            Some(win_thumb.clone())
+                        }
+                    }
+                } else {
+                    // Windows has no thumbnail, but we have cache - use cache
+                    Some(cached)
+                }
+            } else {
+                // Same track, cache is valid
+                Some(cached)
+            }
         } else {
             let encoded = thumbnail_to_base64(&media_props);
             if let Some(ref img) = encoded {
-                guard.insert(cache_key, img.clone());
+                // Only check for stale thumbnails when the track has actually changed
+                // If same track, matching thumbnail is expected and correct
+                let track_changed = previous_title.map(|prev| prev != title).unwrap_or(false);
+                let is_stale = if track_changed {
+                    // Check if this "new" thumbnail matches the previous track's thumbnail
+                    // This detects Windows GSMTC returning stale data when track changes quickly
+                    if let Some(prev_thumb) = previous_thumbnail {
+                        img == prev_thumb
+                    } else {
+                        false
+                    }
+                } else {
+                    false // Same track, so matching thumbnail is expected
+                };
+                
+                if is_stale {
+                    log::warn!("Fetched thumbnail for '{}' matches previous track's image (len: {}), likely stale from Windows GSMTC. Skipping thumbnail this cycle - will refetch on next poll.", 
+                        title, img.len());
+                    
+                    // Don't cache or return the stale thumbnail
+                    // Return None so the snapshot emits without an image
+                    // Next poll cycle (100ms later) will fetch it fresh as a cache MISS
+                    None
+                } else {
+                    // Fresh thumbnail, cache it normally
+                    guard.insert(cache_key.clone(), img.clone());
+                    
+                    // IMPORTANT: Mark this title as the last one we successfully cached
+                    // This will be used on next poll to detect stale thumbnails
+                    // Must happen in snapshot_from_session to ensure it's updated even if
+                    // the snapshot isn't emitted due to no changes
+                    encoded
+                }
+            } else {
+                encoded
             }
-            encoded
         }
     } else {
         thumbnail_to_base64(&media_props)
@@ -257,7 +344,19 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
             }
         };
 
-        let snap = match snapshot_from_session(&session, Some(&state.thumbnail_cache)) {
+        // Extract previous thumbnail and last cached title before calling snapshot_from_session
+        let prev_thumbnail = {
+            let snapshot_guard = state.snapshot.lock().await;
+            snapshot_guard.as_ref().and_then(|s| s.props.album_image.clone())
+        };
+        let last_cached_title = state.last_cached_title.lock().await.clone();
+
+        let snap = match snapshot_from_session(
+            &session, 
+            Some(&state.thumbnail_cache), 
+            prev_thumbnail.as_ref(),
+            last_cached_title.as_deref()
+        ) {
             Ok(s) => s,
             Err(e) => {
                 log::debug!("snapshot_from_session failed: {}", e);
@@ -267,7 +366,55 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
         };
 
         let mut snapshot_guard = state.snapshot.lock().await;
-        if snapshot_guard.as_ref() != Some(&snap) {
+        let should_emit = if let Some(ref old_snap) = *snapshot_guard {
+            // Check if media properties changed (title, artist, album)
+            // This is critical for detecting track changes even if other fields haven't updated
+            let media_changed = old_snap.props != snap.props;
+            let playback_changed = old_snap.is_playing != snap.is_playing 
+                || old_snap.is_shuffle != snap.is_shuffle
+                || old_snap.repeat_mode != snap.repeat_mode;
+            let source_changed = old_snap.source_app_id != snap.source_app_id;
+            
+            // Always emit if media properties changed (new track)
+            if media_changed {
+                log::info!("Track changed: {} -> {}", 
+                    old_snap.props.title, snap.props.title);
+                
+                // Invalidate thumbnail cache for the old track to force fresh fetch
+                // This handles cases where Windows GSMTC returns stale thumbnail on track change
+                if let Ok(mut cache) = state.thumbnail_cache.lock() {
+                    let use_album = old_snap.props.album_title.as_ref()
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false);
+                    let old_key = if use_album {
+                        format!("{}\x1F{}", 
+                            old_snap.source_app_id.as_deref().unwrap_or(""),
+                            old_snap.props.album_title.as_deref().unwrap())
+                    } else {
+                        format!("{}\x1F{}", 
+                            old_snap.source_app_id.as_deref().unwrap_or(""),
+                            old_snap.props.title)
+                    };
+                    cache.remove(&old_key);
+                }
+            }
+            
+            media_changed || playback_changed || source_changed || old_snap != &snap
+        } else {
+            true // First snapshot
+        };
+        
+        // Check playing status before snap is moved
+        let is_playing = snap.is_playing;
+        
+        if should_emit {
+            // Always update last_cached_title to current track title
+            // This is used for stale detection on the NEXT poll cycle
+            // Even if we skip this thumbnail, we want to compare against the current
+            // title on next fetch to continue detecting staleness
+            let mut last_title_guard = state.last_cached_title.lock().await;
+            *last_title_guard = Some(snap.props.title.clone());
+            
             *snapshot_guard = Some(snap.clone());
             drop(snapshot_guard); // Release snapshot lock before acquiring props lock
             
@@ -276,9 +423,13 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
             drop(props_guard); // Release props lock before emitting
             
             let _ = app.emit("media_snapshot", snap);
+        } else {
+            drop(snapshot_guard);
         }
 
-        sleep(Duration::from_millis(150)).await;
+        // Poll more frequently when playing to catch track changes faster
+        let poll_interval = if is_playing { 100 } else { 300 };
+        sleep(Duration::from_millis(poll_interval)).await;
     }
 }
 
@@ -347,21 +498,30 @@ async fn start_media_listener(
                             .and_then(|img| Some(img.data))
                             .map(|bytes| BASE64.encode(bytes));
 
+                        let title = session_model
+                            .media
+                            .as_ref()
+                            .map(|m| m.title.clone())
+                            .unwrap_or_default();
+                        
+                        let artist = session_model
+                            .media
+                            .as_ref()
+                            .map(|m| m.artist.clone())
+                            .unwrap_or_default();
+                        
+                        let album_title = session_model
+                            .media
+                            .as_ref()
+                            .and_then(|m| m.album.clone().map(|a| a.title));
+
+                        log::debug!("gsmtc listener update: {} - {} (album: {:?}, has_image: {})", 
+                            title, artist, album_title, album_image.is_some());
+
                         let dto = MediaPropsDto {
-                            title: session_model
-                                .media
-                                .as_ref()
-                                .map(|m| m.title.clone())
-                                .unwrap_or_default(),
-                            artist: session_model
-                                .media
-                                .as_ref()
-                                .map(|m| m.artist.clone())
-                                .unwrap_or_default(),
-                            album_title: session_model
-                                .media
-                                .as_ref()
-                                .and_then(|m| m.album.clone().map(|a| a.title)),
+                            title,
+                            artist,
+                            album_title,
                             album_image,
                         };
 
@@ -476,7 +636,7 @@ async fn refresh_media_snapshot(
         .GetCurrentSession()
         .map_err(|e| format!("GetCurrentSession failed: {e:?}"))?;
 
-    let snap = snapshot_from_session(&session, Some(&state.thumbnail_cache))?;
+    let snap = snapshot_from_session(&session, Some(&state.thumbnail_cache), None, None)?;
 
     let mut snapshot_guard = state.snapshot.lock().await;
     *snapshot_guard = Some(snap.clone());

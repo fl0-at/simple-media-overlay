@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import { useState } from 'react';
 
 interface StyledImageProps {
   src: string;
@@ -10,6 +11,7 @@ interface StyledImageProps {
   height: number;
   pinned: boolean;
   unoptimized?: boolean;
+  fadeIn?: boolean;
 }
 
 export function StyledImage({
@@ -20,15 +22,21 @@ export function StyledImage({
   height,
   pinned,
   unoptimized = true,
+  fadeIn = false,
 }: StyledImageProps) {
+  const [isLoaded, setIsLoaded] = useState(!fadeIn); // Start as loaded if no fade-in needed
+  
   return (
     <Image
       src={src}
       alt={alt}
-      className={className}
+      className={`${className} ${fadeIn ? (isLoaded ? 'image-loaded' : 'image-loading') : ''}`}
       draggable={false}
       onDragStart={(e) => {
         if (pinned) e.preventDefault();
+      }}
+      onLoad={() => {
+        if (fadeIn) setIsLoaded(true);
       }}
       style={{
         WebkitAppRegion: pinned ? 'no-drag' : 'drag',

@@ -1,18 +1,15 @@
 'use client';
 
 import { StyledImage } from './StyledImage';
-import { getPlayerInfo } from './appInfo';
 
 interface AlbumArtProps {
     imageSrc: string | null;
     albumTitle: string | null;
     pinned: boolean;
-    sourceAppId?: string | null;
+    imageKey?: string;
 }
 
-export function AlbumArt({ imageSrc, albumTitle, pinned, sourceAppId }: AlbumArtProps) {
-    const player = getPlayerInfo(sourceAppId ?? null);
-
+export function AlbumArt({ imageSrc, albumTitle, pinned, imageKey }: AlbumArtProps) {
     return (
         <div
             className="flex flex-col items-center justify-center p-1"
@@ -21,10 +18,10 @@ export function AlbumArt({ imageSrc, albumTitle, pinned, sourceAppId }: AlbumArt
             <div className="w-24 h-24 shrink-0" style={{ aspectRatio: '1/1' }}>
                 {imageSrc ? (
                     <StyledImage
-                        key={imageSrc}
+                        key={imageKey}
                         src={imageSrc}
                         alt={albumTitle || 'Album Art'}
-                        className="w-full h-full rounded-md object-cover"
+                        className="w-full h-full rounded-lg object-cover shadow-album-art"
                         width={96}
                         height={96}
                         pinned={pinned}
@@ -32,10 +29,10 @@ export function AlbumArt({ imageSrc, albumTitle, pinned, sourceAppId }: AlbumArt
                     />
                 ) : (
                     <StyledImage
-                        key="no-art"
+                        key={imageKey}
                         src={'/Generic.svg'}
                         alt={'No Album Art'}
-                        className="w-full h-full rounded-md object-cover bg-white/5"
+                        className="w-full h-full rounded-lg object-cover bg-white/5 shadow-album-art"
                         width={96}
                         height={96}
                         pinned={pinned}
@@ -43,16 +40,6 @@ export function AlbumArt({ imageSrc, albumTitle, pinned, sourceAppId }: AlbumArt
                     />
                 )}
             </div>
-
-            <StyledImage
-                src={player.imageSrc}
-                alt={player.name}
-                className="w-9 h-9 fixed bottom-1.5 left-1"
-                width={36}
-                height={36}
-                pinned={pinned}
-                unoptimized
-            />
         </div>
     );
 }

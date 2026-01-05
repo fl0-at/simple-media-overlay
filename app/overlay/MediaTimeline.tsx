@@ -24,7 +24,7 @@ export function MediaTimeline({ hasTimeline, progress, onProgressClick }: MediaT
       aria-hidden={!visible}
     >
       <div
-        className="h-full bg-white rounded-full"
+        className="h-full bg-white rounded-full transition-all duration-75 ease-linear"
         style={{ width: `${progress * 100}%` }}
       />
     </div>

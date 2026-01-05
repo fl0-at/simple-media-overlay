@@ -8,6 +8,7 @@ interface MediaControlsProps {
   isRepeat: boolean;
   sourceAppId: string | null;
   pinned: boolean;
+  playPauseImpact?: boolean;
   onPlayPause: () => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -21,6 +22,7 @@ export function MediaControls({
   isRepeat,
   sourceAppId,
   pinned,
+  playPauseImpact = false,
   onPlayPause,
   onPrevious,
   onNext,
@@ -61,7 +63,7 @@ export function MediaControls({
         I◀◀
       </button>
       <button
-        className="px-3 py-1 rounded-full bg-white hover:bg-white/80 text-xs text-black font-semibold"
+        className={`px-3 py-1 rounded-full bg-white hover:bg-white/80 text-xs text-black font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''}`}
         id="play-pause-button"
         onClick={onPlayPause}
         style={{ WebkitAppRegion: 'no-drag' } as never}

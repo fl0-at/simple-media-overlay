@@ -1,8 +1,10 @@
 'use client';
 
+import { MouseEvent } from 'react';
+
 interface PinButtonProps {
   pinned: boolean;
-  onToggle: () => void;
+  onToggle: (e: MouseEvent<HTMLButtonElement>) => void;
 }
 
 export function PinButton({ pinned, onToggle }: PinButtonProps) {

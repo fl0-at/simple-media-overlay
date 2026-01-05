@@ -16,17 +16,17 @@ export default function UpdateNotification({ onDismiss }: UpdateNotificationProp
   useEffect(() => {
     // Listen for update events from Rust backend
     const setupListeners = async () => {
-      const unlistenAvailable = await listen<string>('update-available', (event) => {
-        setVersion(event.payload);
+      const unlistenAvailable = await listen<string>('update-available', ({ payload }) => {
+        setVersion(payload);
         setUpdateAvailable(true);
       });
 
-      const unlistenDownloaded = await listen<string>('update-downloaded', (event) => {
+      const unlistenDownloaded = await listen<string>('update-downloaded', () => {
         setUpdateDownloaded(true);
       });
 
-      const unlistenError = await listen<string>('update-error', (event) => {
-        setError(event.payload);
+      const unlistenError = await listen<string>('update-error', ({ payload }) => {
+        setError(payload);
       });
 
       return () => {
