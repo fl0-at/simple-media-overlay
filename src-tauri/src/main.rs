@@ -795,10 +795,17 @@ fn main() {
                 }
             }
             
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                check_for_updates(handle).await;
-            });
+            #[cfg(not(debug_assertions))]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    check_for_updates(handle).await;
+                });
+            }
+            
+            #[cfg(debug_assertions)]
+            log::info!("Skipping update check in development mode");
+            
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -806,11 +813,13 @@ fn main() {
 }
 
 #[derive(Clone, Serialize)]
+#[allow(dead_code)]
 struct UpdateInfo {
     version: String,
     current_version: String,
 }
 
+#[allow(dead_code)]
 async fn check_for_updates(app: AppHandle) {
     // Get current version
     let current_version = app.package_info().version.to_string();

@@ -2,10 +2,12 @@
 
 import { isPlaybackModeSupported } from './appInfo';
 
+type RepeatMode = 'none' | 'track' | 'list';
+
 interface MediaControlsProps {
   isPlaying: boolean;
   isShuffle: boolean;
-  isRepeat: boolean;
+  repeatMode: RepeatMode;
   sourceAppId: string | null;
   pinned: boolean;
   playPauseImpact?: boolean;
@@ -13,13 +15,13 @@ interface MediaControlsProps {
   onPrevious: () => void;
   onNext: () => void;
   onShuffle: (value: boolean) => void;
-  onRepeat: (value: boolean) => void;
+  onRepeat: (mode: RepeatMode) => void;
 }
 
 export function MediaControls({
   isPlaying,
   isShuffle,
-  isRepeat,
+  repeatMode,
   sourceAppId,
   pinned,
   playPauseImpact = false,
@@ -30,6 +32,27 @@ export function MediaControls({
   onRepeat,
 }: MediaControlsProps) {
   const showPlaybackModes = isPlaybackModeSupported(sourceAppId);
+
+  const handleRepeatClick = () => {
+    // Cycle: none -> list -> track -> none
+    if (repeatMode === 'none') {
+      onRepeat('list');
+    } else if (repeatMode === 'list') {
+      onRepeat('track');
+    } else {
+      onRepeat('none');
+    }
+  };
+
+  const getRepeatIcon = () => {
+    if (repeatMode === 'track') {
+      return '🔂'; // repeat one
+    } else if (repeatMode === 'list') {
+      return '🔁'; // repeat all
+    } else {
+      return '🔁'; // repeat off (same icon but different style)
+    }
+  };
 
   return (
     <div
@@ -43,15 +66,15 @@ export function MediaControls({
         <button
           className={
             'px-2 py-1 rounded-full text-xs ' +
-            (isRepeat
+            (repeatMode !== 'none'
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
           }
-          onClick={() => onRepeat(!isRepeat)}
+          onClick={handleRepeatClick}
           id="repeat-button"
           style={{ WebkitAppRegion: 'no-drag' } as never}
         >
-          🔁
+          {getRepeatIcon()}
         </button>
       )}
       <button

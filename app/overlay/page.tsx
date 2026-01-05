@@ -63,12 +63,12 @@ async function sendControl(action: 'playPause' | 'next' | 'previous', setDirecti
   }
 }
 
-async function sendPlaybackMode(mode: 'shuffle' | 'repeat', value: boolean) {
+async function sendPlaybackMode(mode: 'shuffle' | 'repeat', value: boolean | RepeatMode) {
   try {
     if (mode === 'shuffle') {
-      await invoke('set_shuffle', { active: value });
+      await invoke('set_shuffle', { active: value as boolean });
     } else if (mode === 'repeat') {
-      await invoke('set_repeat', { mode: value ? 'track' : 'none' });
+      await invoke('set_repeat', { mode: value as RepeatMode });
     }
   } catch (e) {
     console.error('sendPlaybackMode failed', e);
@@ -766,7 +766,6 @@ export default function OverlayPage() {
 
   const isPlaying = snapshot?.is_playing ?? false;
   const isShuffle = snapshot?.is_shuffle ?? false;
-  const isRepeat = snapshot?.repeat_mode === 'track';
 
   let effectivePositionMs = basePositionMs ?? 0;
   if (isPlaying && basePositionMs != null) {
@@ -851,15 +850,6 @@ export default function OverlayPage() {
     </div>
   );
 
-  const AlbumComponent = media?.album_title && (
-    <div
-      className="flex-row text-xs text-white/60 w-full"
-      style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
-    >
-      {effectiveAlbumTitle}
-    </div>
-  );
-
   return (
     <div
       className="w-screen h-screen flex items-center flex-start gap-1 flex-row px-2 py-1.5"
@@ -910,7 +900,6 @@ export default function OverlayPage() {
               <MediaInfo
                 title={TitleComponent}
                 artist={ArtistComponent}
-                albumTitle={AlbumComponent}
                 pinned={pinned}
               />
               <PinButton pinned={pinned} onToggle={handlePinToggle} />
@@ -925,7 +914,7 @@ export default function OverlayPage() {
             <MediaControls
               isPlaying={isPlaying}
               isShuffle={isShuffle}
-              isRepeat={isRepeat}
+              repeatMode={snapshot?.repeat_mode ?? 'none'}
               sourceAppId={sourceAppId}
               pinned={pinned}
               playPauseImpact={playPauseImpact}
@@ -933,7 +922,7 @@ export default function OverlayPage() {
               onPrevious={() => sendControl('previous', setTrackChangeDirection, setIsFading)}
               onNext={() => sendControl('next', setTrackChangeDirection, setIsFading)}
               onShuffle={(value) => sendPlaybackMode('shuffle', value)}
-              onRepeat={(value) => sendPlaybackMode('repeat', value)}
+              onRepeat={(mode) => sendPlaybackMode('repeat', mode)}
             />
             
           </div>

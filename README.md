@@ -67,7 +67,9 @@ Any media player or application that publishes metadata about the currently play
 - ⭕ Opera Browser
 - 🎻 Vivaldi Browser
 - 🌊 Tidal Desktop Client
+- 🛜 Spotify Desktop Client
 - 🚧 Videolan VLC (UWP App only as of now)
+- 👽 Foobar2000
 - 🐒 MediaMonkey 2024
 - 🪟 Windows 11 default media player
 
@@ -75,15 +77,12 @@ For the following apps, I have not tested, but they should have their own icons:
 
 - 🍎 Apple Music
 - 🎧 Apple Podcasts
-- 👽 Foobar2000
 - 🎵 iTunes
 - 🧭 Safari Browser
 - ▶️ Groove Media Player
-- 🎬 Media Player Classic
-- 🛜 Spotify
 - ⚡ Winamp
 
-_I also added Kodi & KMPlayer, but later found out they do not actually publish any media metadata via GSMTC APIs, and I can confirm that the overlay will not display media that is played via these apps._
+_I also added Kodi, KMPlayer, and Media Player Classic (MPC-HC [as maintained by clsid2](https://github.com/clsid2/mpc-hc)) but later found out they do not actually publish any media metadata via GSMTC APIs, and I can confirm that the overlay will not display media that is played via these apps._
 
 **If you want me to add a specific media player/app icon, please [open a new issue](https://github.com/fl0-at/simple-media-overlay/issues/new)!**
 
@@ -99,6 +98,16 @@ For some reason, the shuffle and repeat functionality don't seem to work when pl
 - 🎻 Vivaldi Browser
 - 🧭 Safari Browser
 - 🌊 Tidal Desktop Client
+- 🐒 MediaMonkey 2024
+- 👽 Foobar2000
+
+The following apps also do not publish timeline information via GSMTC APIs:
+
+- 🐒 MediaMonkey 2024
+- 👽 Foobar2000
+
+Thumbnails are not provided via GSMTC APIs by these applications:
+
 - 🐒 MediaMonkey 2024
 
 ### Windows-only support

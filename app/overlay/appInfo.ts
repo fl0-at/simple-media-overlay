@@ -39,6 +39,7 @@ export const blockedAppsForPlaybackModes = [
     'vivaldi',
     'safari',
     'mediamonkey',
+    'foobar2000',
 ];
 
 /**
@@ -89,7 +90,7 @@ export function getPlayerInfo(sourceAppId: string | null): PlayerInfo {
   if (id.includes('groove')) return { name: 'Groove Music', imageSrc: '/Groove.svg' };
   if (id.includes('kmplayer')) return { name: 'KMPlayer', imageSrc: '/KMPlayer.png' };
   if (id.includes('mediamonkey')) return { name: 'MediaMonkey', imageSrc: '/MediaMonkey.png' };
-  if (id.includes('mpc-hc') || id.includes('mpc-be') || id.includes('media.player.classic')) return { name: 'Media Player Classic', imageSrc: '/MPC.svg' };
+  if (id.includes('mpc-hc64') || id.includes('mpc-hc') || id.includes('mpc-be') || id.includes('mpc') || id.includes('media.player.classic')) return { name: 'Media Player Classic', imageSrc: '/MPC.svg' };
   if (id.includes('videolan') || id.includes('vlc')) return { name: 'VLC', imageSrc: '/VLC.svg' };
   if (id.includes('winamp')) return { name: 'Winamp', imageSrc: '/Winamp.svg' };
   if (id.includes('zunemusic') || id.includes('windows.media') || id.includes('microsoft.zunemusic'))
