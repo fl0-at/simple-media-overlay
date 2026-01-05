@@ -69,7 +69,6 @@ Any media player or application that publishes metadata about the currently play
 - 🌊 Tidal Desktop Client
 - 🚧 Videolan VLC (UWP App only as of now)
 - 🐒 MediaMonkey 2024
-
 - 🪟 Windows 11 default media player
 
 For the following apps, I have not tested, but they should have their own icons:
