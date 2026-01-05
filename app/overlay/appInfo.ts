@@ -87,6 +87,7 @@ export function getPlayerInfo(sourceAppId: string | null): PlayerInfo {
   if (id.includes('itunes')) return { name: 'iTunes', imageSrc: '/iTunes.svg' };
   if (id.includes('foobar2000')) return { name: 'Foobar2000', imageSrc: '/Foobar2000.svg' };
   if (id.includes('groove')) return { name: 'Groove Music', imageSrc: '/Groove.svg' };
+  if (id.includes('kmplayer')) return { name: 'KMPlayer', imageSrc: '/KMPlayer.png' };
   if (id.includes('mediamonkey')) return { name: 'MediaMonkey', imageSrc: '/MediaMonkey.png' };
   if (id.includes('mpc-hc') || id.includes('mpc-be') || id.includes('media.player.classic')) return { name: 'Media Player Classic', imageSrc: '/MPC.svg' };
   if (id.includes('videolan') || id.includes('vlc')) return { name: 'VLC', imageSrc: '/VLC.svg' };
