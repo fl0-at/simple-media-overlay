@@ -162,8 +162,17 @@ jobs:
           $version = "${{ github.ref_name }}".TrimStart('v')
           $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/simple-media-overlay_${version}_x64_en-US.msi"
           
-          # Get the signature file content
-          $sigContent = Get-Content "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi.sig" -Raw
+          # Find the signature file
+          Write-Host "Looking for signature file..."
+          $sigFile = Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "*.msi.sig" | Select-Object -First 1
+          
+          if (-not $sigFile) {
+            Write-Error "Signature file not found!"
+            exit 1
+          }
+          
+          Write-Host "Found signature file at: $($sigFile.FullName)"
+          $sigContent = Get-Content $sigFile.FullName -Raw
           
           $json = @{
             version = $version
