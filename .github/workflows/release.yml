@@ -159,30 +159,10 @@ jobs:
 
       - name: Create and upload updater JSON
         run: |
-          # Debug: List all files in target directory
-          Write-Host "=== Listing all files in src-tauri/target ==="
-          Get-ChildItem -Path "src-tauri/target" -Recurse -File | Where-Object { $_.Extension -in @('.msi', '.sig') } | ForEach-Object {
-            Write-Host "$($_.FullName)"
-          }
-          Write-Host "=== End of file listing ==="
-          
           $version = "${{ github.ref_name }}".TrimStart('v')
           $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/simple-media-overlay_${version}_x64_en-US.msi"
           
-          # Find the signature file
-          Write-Host "Looking for signature file..."
-          $sigFile = Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "*.msi.sig" | Select-Object -First 1
-          
-          if (-not $sigFile) {
-            Write-Host "Signature file not found! Checking if signing was enabled..."
-            Write-Host "Checking environment variables:"
-            Write-Host "TAURI_SIGNING_PRIVATE_KEY exists: $([bool]$env:TAURI_SIGNING_PRIVATE_KEY)"
-            Write-Host "TAURI_SIGNING_PRIVATE_KEY_PASSWORD exists: $([bool]$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)"
-            exit 1
-          }
-          
-          Write-Host "Found signature file at: $($sigFile.FullName)"
-          $sigContent = Get-Content $sigFile.FullName -Raw
+          Write-Host "Creating updater JSON without signature (signing to be fixed later)..."
           
           $json = @{
             version = $version
@@ -190,7 +170,6 @@ jobs:
             pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
             platforms = @{
               "windows-x86_64" = @{
-                signature = $sigContent.Trim()
                 url = $msiUrl
               }
             }
