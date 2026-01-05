@@ -98,3 +98,18 @@ jobs:
           git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
           git tag "v${{ steps.bump.outputs.new_version }}"
           git push origin HEAD --tags
+
+      - name: Trigger release workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event_type: 'release-requested',
+              client_payload: {
+                tag: 'v${{ steps.bump.outputs.new_version }}'
+              }
+            });
+            console.log('Triggered release workflow for v${{ steps.bump.outputs.new_version }}');

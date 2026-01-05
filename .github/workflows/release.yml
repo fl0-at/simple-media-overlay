@@ -5,6 +5,8 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+  repository_dispatch:
+    types: [release-requested]
 
 jobs:
   create-release:
@@ -13,11 +15,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create-release.outputs.result }}
+      tag_name: ${{ steps.set-tag.outputs.tag }}
 
     steps:
+      - name: Set tag name
+        id: set-tag
+        run: |
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ steps.set-tag.outputs.tag }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
