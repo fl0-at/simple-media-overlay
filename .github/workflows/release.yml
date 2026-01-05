@@ -167,6 +167,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
@@ -176,18 +178,39 @@ jobs:
           $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
           $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.tag_name }}/simple-media-overlay_${version}_x64_en-US.msi"
           
-          Write-Host "Creating updater JSON without signature (signing to be fixed later)..."
+          Write-Host "Looking for signature file..."
+          $sigFile = Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "*.msi.sig" -ErrorAction SilentlyContinue | Select-Object -First 1
           
-          $json = @{
-            version = $version
-            notes = "See release notes for details"
-            pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-            platforms = @{
-              "windows-x86_64" = @{
-                url = $msiUrl
+          if ($sigFile) {
+            Write-Host "Found signature file: $($sigFile.FullName)"
+            $sigContent = Get-Content $sigFile.FullName -Raw
+            
+            $json = @{
+              version = $version
+              notes = "See release notes for details"
+              pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+              platforms = @{
+                "windows-x86_64" = @{
+                  signature = $sigContent.Trim()
+                  url = $msiUrl
+                }
               }
-            }
-          } | ConvertTo-Json -Depth 10
+            } | ConvertTo-Json -Depth 10
+          } else {
+            Write-Host "WARNING: No signature file found. Creating unsigned manifest."
+            Write-Host "Note: Tauri v2 requires signed updates for production!"
+            
+            $json = @{
+              version = $version
+              notes = "See release notes for details"
+              pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+              platforms = @{
+                "windows-x86_64" = @{
+                  url = $msiUrl
+                }
+              }
+            } | ConvertTo-Json -Depth 10
+          }
           
           $json | Out-File -FilePath "latest.json" -Encoding utf8
           
