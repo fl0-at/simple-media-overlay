@@ -44,6 +44,19 @@ jobs:
           # Check commit message for version bump indicators
           COMMIT_MSG=$(git log -1 --pretty=%B)
           
+          # Skip version bump for non-versioned commits
+          if [[ "$COMMIT_MSG" =~ ^chore: ]] || \
+             [[ "$COMMIT_MSG" =~ ^docs: ]] || \
+             [[ "$COMMIT_MSG" =~ ^style: ]] || \
+             [[ "$COMMIT_MSG" =~ ^refactor: ]] || \
+             [[ "$COMMIT_MSG" =~ ^test: ]] || \
+             [[ "$COMMIT_MSG" =~ ^build: ]] || \
+             [[ "$COMMIT_MSG" =~ ^ci: ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Skipping version bump for non-versioned commit: $COMMIT_MSG"
+            exit 0
+          fi
+          
           if [[ "$COMMIT_MSG" =~ \[major\] ]] || [[ "$COMMIT_MSG" =~ BREAKING\ CHANGE ]]; then
             echo "type=major" >> $GITHUB_OUTPUT
           elif [[ "$COMMIT_MSG" =~ \[minor\] ]] || [[ "$COMMIT_MSG" =~ feat: ]]; then
@@ -53,6 +66,7 @@ jobs:
           fi
 
       - name: Bump version
+        if: steps.bump-type.outputs.skip != 'true'
         id: bump
         run: |
           IFS='.' read -r major minor patch <<< "${{ steps.get-version.outputs.current_version }}"
@@ -75,10 +89,12 @@ jobs:
           echo "New ${{ steps.bump-type.outputs.type }} version: $NEW_VERSION"
 
       - name: Update package.json
+        if: steps.bump-type.outputs.skip != 'true'
         run: |
           npm version ${{ steps.bump.outputs.new_version }} --no-git-tag-version
 
       - name: Update tauri.conf.json
+        if: steps.bump-type.outputs.skip != 'true'
         run: |
           node -e "
             const fs = require('fs');
@@ -89,10 +105,12 @@ jobs:
           "
 
       - name: Update Cargo.toml
+        if: steps.bump-type.outputs.skip != 'true'
         run: |
           sed -i 's/^version = ".*"/version = "${{ steps.bump.outputs.new_version }}"/' src-tauri/Cargo.toml
 
       - name: Commit and tag
+        if: steps.bump-type.outputs.skip != 'true'
         run: |
           git add package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
           git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
@@ -100,6 +118,7 @@ jobs:
           git push origin HEAD --tags
 
       - name: Trigger release workflow
+        if: steps.bump-type.outputs.skip != 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GH_PAT }}
