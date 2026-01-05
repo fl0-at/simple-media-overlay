@@ -159,6 +159,13 @@ jobs:
 
       - name: Create and upload updater JSON
         run: |
+          # Debug: List all files in target directory
+          Write-Host "=== Listing all files in src-tauri/target ==="
+          Get-ChildItem -Path "src-tauri/target" -Recurse -File | Where-Object { $_.Extension -in @('.msi', '.sig') } | ForEach-Object {
+            Write-Host "$($_.FullName)"
+          }
+          Write-Host "=== End of file listing ==="
+          
           $version = "${{ github.ref_name }}".TrimStart('v')
           $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/simple-media-overlay_${version}_x64_en-US.msi"
           
@@ -167,7 +174,10 @@ jobs:
           $sigFile = Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "*.msi.sig" | Select-Object -First 1
           
           if (-not $sigFile) {
-            Write-Error "Signature file not found!"
+            Write-Host "Signature file not found! Checking if signing was enabled..."
+            Write-Host "Checking environment variables:"
+            Write-Host "TAURI_SIGNING_PRIVATE_KEY exists: $([bool]$env:TAURI_SIGNING_PRIVATE_KEY)"
+            Write-Host "TAURI_SIGNING_PRIVATE_KEY_PASSWORD exists: $([bool]$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)"
             exit 1
           }
           
