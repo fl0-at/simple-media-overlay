@@ -66,25 +66,36 @@ export function getPlayerInfo(sourceAppId: string | null): PlayerInfo {
 
   if (!id) return { name: 'Unknown App', imageSrc: '/Generic.svg' };
 
-  if (id.includes('applemusic') || id.includes('apple.music'))
-    return { name: 'Apple Music', imageSrc: '/AppleMusic.svg' };
-  if (id.includes('podcast') || id.includes('apple.podcasts'))
-    return { name: 'Apple Podcasts', imageSrc: '/ApplePodcasts.svg' };
+  // browsers
   if (id.includes('brave')) return { name: 'Brave Browser', imageSrc: '/Brave.png' };
   if (id.includes('chrome')) return { name: 'Chrome', imageSrc: '/Chrome.svg' };
   if (id.includes('edge')) return { name: 'Edge', imageSrc: '/Edge.svg' };
   if (id.includes('firefox') || id === '308046b0af4a39cb') return { name: 'Firefox', imageSrc: '/Firefox.svg' };
-  if (id.includes('groove')) return { name: 'Groove Music', imageSrc: '/Groove.svg' };
-  if (id.includes('kodi')) return { name: 'Kodi', imageSrc: '/Kodi.svg' };
-  if (id.includes('mediamonkey')) return { name: 'MediaMonkey', imageSrc: '/MediaMonkey.png' };
   if (id.includes('opera')) return { name: 'Opera', imageSrc: '/Opera.svg' };
   if (id.includes('vivaldi')) return { name: 'Vivaldi', imageSrc: '/Vivaldi.svg' };
   if (id.includes('safari')) return { name: 'Safari', imageSrc: '/Safari.svg' };
+  
+  // streaming services
   if (id.includes('spotify')) return { name: 'Spotify', imageSrc: '/Spotify.svg' };
   if (id.includes('tidal')) return { name: 'TIDAL', imageSrc: '/Tidal.png' };
+  if (id.includes('applemusic') || id.includes('apple.music'))
+    return { name: 'Apple Music', imageSrc: '/AppleMusic.svg' };
+  if (id.includes('podcast') || id.includes('apple.podcasts'))
+    return { name: 'Apple Podcasts', imageSrc: '/ApplePodcasts.svg' };
+  
+  // media players
+  if (id.includes('itunes')) return { name: 'iTunes', imageSrc: '/iTunes.svg' };
+  if (id.includes('foobar2000')) return { name: 'Foobar2000', imageSrc: '/Foobar2000.svg' };
+  if (id.includes('groove')) return { name: 'Groove Music', imageSrc: '/Groove.svg' };
+  if (id.includes('mediamonkey')) return { name: 'MediaMonkey', imageSrc: '/MediaMonkey.png' };
+  if (id.includes('mpc-hc') || id.includes('mpc-be') || id.includes('media.player.classic')) return { name: 'Media Player Classic', imageSrc: '/MPC.svg' };
   if (id.includes('videolan') || id.includes('vlc')) return { name: 'VLC', imageSrc: '/VLC.svg' };
+  if (id.includes('winamp')) return { name: 'Winamp', imageSrc: '/Winamp.svg' };
   if (id.includes('zunemusic') || id.includes('windows.media') || id.includes('microsoft.zunemusic'))
     return { name: 'Windows Media Player', imageSrc: '/Win11_Media_Player.svg' };
+
+  // other
+  if (id.includes('kodi')) return { name: 'Kodi', imageSrc: '/Kodi.svg' };
 
   return { name: 'Unknown App', imageSrc: '/Generic.svg' };
 }
