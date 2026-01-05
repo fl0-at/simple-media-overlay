@@ -702,26 +702,44 @@ fn main() {
         .expect("error while running tauri application");
 }
 
+#[derive(Clone, Serialize)]
+struct UpdateInfo {
+    version: String,
+    current_version: String,
+}
+
 async fn check_for_updates(app: AppHandle) {
+    // Get current version
+    let current_version = app.package_info().version.to_string();
+    
     match app.updater().ok() {
         Some(updater) => {
             match updater.check().await {
                 Ok(Some(update)) => {
-                    log::info!("Update available: {}", update.version);
+                    log::info!("Update available: {} (current: {})", update.version, current_version);
                     
-                    // Emit event to frontend to notify user
-                    let _ = app.emit("update-available", update.version.clone());
+                    // Emit event to frontend to notify user that update is available and starting download
+                    let update_info = UpdateInfo {
+                        version: update.version.clone(),
+                        current_version: current_version.clone(),
+                    };
+                    let _ = app.emit("update-available", &update_info);
                     
                     // Download and install the update
+                    let version_clone = update.version.clone();
                     match update.download_and_install(|_chunk_length, _content_length| {
-                        // Progress callback - could emit progress events here
+                        // Progress callback - could emit progress events here if needed
                     }, || {
                         // Download completed callback
                         log::info!("Update downloaded, will install on app restart");
                     }).await {
                         Ok(_) => {
                             log::info!("Update ready to install");
-                            let _ = app.emit("update-downloaded", update.version);
+                            let ready_info = UpdateInfo {
+                                version: version_clone,
+                                current_version,
+                            };
+                            let _ = app.emit("update-downloaded", &ready_info);
                         }
                         Err(e) => {
                             log::error!("Failed to download update: {}", e);
@@ -730,7 +748,7 @@ async fn check_for_updates(app: AppHandle) {
                     }
                 }
                 Ok(None) => {
-                    log::info!("No updates available");
+                    log::info!("No updates available - running latest version {}", current_version);
                 }
                 Err(e) => {
                     log::warn!("Failed to check for updates: {}", e);
