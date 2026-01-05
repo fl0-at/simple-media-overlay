@@ -130,6 +130,8 @@ export default function OverlayPage() {
 
     let frameId: number;
     let last = performance.now();
+    const durationMs = snapshot.duration_ms;
+    const positionMs = snapshot.position_ms ?? 0;
 
     const tick = (now: number) => {
       const deltaMs = now - last;
@@ -137,7 +139,8 @@ export default function OverlayPage() {
 
       setPlayElapsedMs((prev) => {
         const next = prev + deltaMs;
-        return Math.min(next, snapshot.duration_ms!);
+        const maxElapsed = durationMs - positionMs;
+        return Math.min(next, maxElapsed);
       });
 
       frameId = requestAnimationFrame(tick);
@@ -148,17 +151,18 @@ export default function OverlayPage() {
     return () => {
       cancelAnimationFrame(frameId);
     };
-  }, [snapshot?.is_playing, snapshot?.duration_ms]);
+  }, [snapshot?.is_playing, snapshot?.duration_ms, snapshot?.position_ms]);
 
   // Align client-side elapsed with backend snapshots to avoid jumps on pause/resume
   useEffect(() => {
-    // Whenever the backend position or playing state updates, reset the local elapsed
+    // Whenever the backend position updates, reset the local elapsed
     // so effectivePositionMs = basePositionMs + elapsedSinceLastSnapshot
     // BUT don't reset during track change animation to avoid timeline jumping
+    // Note: We only reset when position_ms changes, not when is_playing changes
     if (!isAnimating) {
       setPlayElapsedMs(0);
     }
-  }, [snapshot?.position_ms, snapshot?.is_playing, snapshot?.source_app_id, isAnimating]);
+  }, [snapshot?.position_ms, snapshot?.source_app_id, isAnimating]);
 
   const hasSnapshotTitle = !!snapshot?.props?.title;
   const hasMediaTitle = !!media?.title;
@@ -765,7 +769,7 @@ export default function OverlayPage() {
   const isRepeat = snapshot?.repeat_mode === 'track';
 
   let effectivePositionMs = basePositionMs ?? 0;
-  if (isPlaying && basePositionMs != null && playElapsedMs > 0) {
+  if (isPlaying && basePositionMs != null) {
     const advanced = basePositionMs + playElapsedMs;
     effectivePositionMs = Math.min(durationMs || Infinity, advanced);
   }
