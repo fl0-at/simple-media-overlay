@@ -31,6 +31,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ steps.set-tag.outputs.tag }}
+          fetch-tags: true
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -42,7 +43,7 @@ jobs:
         run: |
           # Get the previous tag
           PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          CURRENT_TAG=${{ github.ref_name }}
+          CURRENT_TAG=${{ steps.set-tag.outputs.tag }}
           
           if [ -z "$PREVIOUS_TAG" ]; then
             COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
@@ -172,8 +173,8 @@ jobs:
 
       - name: Create and upload updater JSON
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
-          $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/simple-media-overlay_${version}_x64_en-US.msi"
+          $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
+          $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.tag_name }}/simple-media-overlay_${version}_x64_en-US.msi"
           
           Write-Host "Creating updater JSON without signature (signing to be fixed later)..."
           
@@ -194,7 +195,7 @@ jobs:
           Get-Content "latest.json"
           
           # Upload to release using GitHub CLI
-          gh release upload ${{ github.ref_name }} latest.json --clobber
+          gh release upload ${{ needs.create-release.outputs.tag_name }} latest.json --clobber
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
