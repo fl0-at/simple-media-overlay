@@ -1,5 +1,6 @@
 'use client';
 
+import { Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from 'lucide-react';
 import { isPlaybackModeSupported } from './appInfo';
 
 type RepeatMode = 'none' | 'track' | 'list';
@@ -46,11 +47,11 @@ export function MediaControls({
 
   const getRepeatIcon = () => {
     if (repeatMode === 'track') {
-      return '🔂'; // repeat one
+      return <Repeat1 />; // repeat once
     } else if (repeatMode === 'list') {
-      return '🔁'; // repeat all
+      return <Repeat />; // repeat all
     } else {
-      return '🔁'; // repeat off (same icon but different style)
+      return <Repeat />; // repeat off (same icon but different style)
     }
   };
 
@@ -65,7 +66,7 @@ export function MediaControls({
       {showPlaybackModes && (
         <button
           className={
-            'px-2 py-1 rounded-full text-xs ' +
+            'px-2 py-1 rounded-full min-w-10 text-xs ' +
             (repeatMode !== 'none'
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
@@ -78,12 +79,12 @@ export function MediaControls({
         </button>
       )}
       <button
-        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
+        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="back-button"
         onClick={onPrevious}
         style={{ WebkitAppRegion: 'no-drag' } as never}
       >
-        I◀◀
+        <SkipBack />
       </button>
       <button
         className={`px-3 py-1 rounded-full bg-white hover:bg-white/80 text-xs text-black font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''}`}
@@ -91,20 +92,20 @@ export function MediaControls({
         onClick={onPlayPause}
         style={{ WebkitAppRegion: 'no-drag' } as never}
       >
-        {isPlaying ? ' ⏸ ' : ' ▶ '}
+        {isPlaying ? <Pause /> : <Play />}
       </button>
       <button
-        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
+        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="next-button"
         onClick={onNext}
         style={{ WebkitAppRegion: 'no-drag' } as never}
       >
-        ▶▶I
+        <SkipForward />
       </button>
       {showPlaybackModes && (
         <button
           className={
-            'px-2 py-1 rounded-full text-xs ' +
+            'px-2 py-1 rounded-full min-w-10 text-xs ' +
             (isShuffle
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
@@ -113,7 +114,7 @@ export function MediaControls({
           id="shuffle-button"
           style={{ WebkitAppRegion: 'no-drag' } as never}
         >
-          🔀
+          <Shuffle />
         </button>
       )}
     </div>

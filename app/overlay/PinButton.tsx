@@ -1,5 +1,6 @@
 'use client';
 
+import { Pin, PinOff } from 'lucide-react';
 import { MouseEvent } from 'react';
 
 interface PinButtonProps {
@@ -20,7 +21,7 @@ export function PinButton({ pinned, onToggle }: PinButtonProps) {
         onClick={onToggle}
         style={{ WebkitAppRegion: 'no-drag' } as never}
       >
-        {pinned ? '📍' : '📌'}
+        {pinned ? <PinOff /> : <Pin />}
       </button>
     </div>
   );
