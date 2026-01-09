@@ -74,6 +74,7 @@ export function MediaControls({
           onClick={handleRepeatClick}
           id="repeat-button"
           style={{ WebkitAppRegion: 'no-drag' } as never}
+          title="Repeat Mode"
         >
           {getRepeatIcon()}
         </button>
@@ -83,6 +84,7 @@ export function MediaControls({
         id="back-button"
         onClick={onPrevious}
         style={{ WebkitAppRegion: 'no-drag' } as never}
+        title="Previous"
       >
         <SkipBack />
       </button>
@@ -91,6 +93,7 @@ export function MediaControls({
         id="play-pause-button"
         onClick={onPlayPause}
         style={{ WebkitAppRegion: 'no-drag' } as never}
+        title={isPlaying ? 'Pause' : 'Play'}
       >
         {isPlaying ? <Pause /> : <Play />}
       </button>
@@ -99,6 +102,7 @@ export function MediaControls({
         id="next-button"
         onClick={onNext}
         style={{ WebkitAppRegion: 'no-drag' } as never}
+        title="Next"
       >
         <SkipForward />
       </button>
@@ -113,6 +117,7 @@ export function MediaControls({
           onClick={() => onShuffle(!isShuffle)}
           id="shuffle-button"
           style={{ WebkitAppRegion: 'no-drag' } as never}
+          title="Shuffle"
         >
           <Shuffle />
         </button>

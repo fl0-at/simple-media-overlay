@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState, MouseEvent } from 'react';
-import { X, Pin, PinOff } from 'lucide-react';
+import { WindowControls } from '../WindowControls';
 
 interface LyricsData {
   plainLyrics: string | null;
@@ -77,7 +77,7 @@ export default function LyricsPage() {
   const parseSyncedLyrics = (syncedLyrics: string): LyricsLine[] => {
     const lines: LyricsLine[] = [];
     const lrcRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/g;
-    
+
     let match;
     while ((match = lrcRegex.exec(syncedLyrics)) !== null) {
       const minutes = parseInt(match[1], 10);
@@ -85,10 +85,10 @@ export default function LyricsPage() {
       const centiseconds = match[3].length === 2 ? parseInt(match[3], 10) : parseInt(match[3], 10) / 10;
       const timestamp = (minutes * 60 + seconds) * 1000 + centiseconds * 10;
       const text = match[4].trim();
-      
+
       lines.push({ timestamp, text });
     }
-    
+
     return lines.sort((a, b) => a.timestamp - b.timestamp);
   };
 
@@ -102,7 +102,7 @@ export default function LyricsPage() {
     setLoading(true);
     setError(null);
     setCanRetry(false);
-    
+
     try {
       const result = await invoke<LyricsData>('fetch_lyrics', {
         trackName: title,
@@ -110,9 +110,9 @@ export default function LyricsPage() {
         albumName: albumTitle,
         durationMs,
       });
-      
+
       setLyrics(result);
-      
+
       if (result.syncedLyrics) {
         setParsedLyrics(parseSyncedLyrics(result.syncedLyrics));
       } else {
@@ -120,7 +120,7 @@ export default function LyricsPage() {
       }
     } catch (e) {
       const errorMsg = String(e);
-      
+
       // Only show user-friendly errors to the user
       if (errorMsg.includes('No lyrics found') || errorMsg.includes('No synced lyrics')) {
         // 404 - not an error, just no lyrics available (silently handle)
@@ -140,7 +140,7 @@ export default function LyricsPage() {
         setError('Unable to load lyrics');
         setCanRetry(true);
       }
-      
+
       setLyrics(null);
       setParsedLyrics([]);
     } finally {
@@ -178,6 +178,27 @@ export default function LyricsPage() {
     setPinned(!pinned);
   };
 
+  // Handle context menu prevention
+  useEffect(() => {
+    const window = getCurrentWindow();
+    invoke('configure_window_menu', { window });
+  }, []);
+
+  // Always prevent webview context menu (native Windows menu with Move/Close will show instead)
+  useEffect(() => {
+    const handleContextMenu = async (e: Event) => {
+      // Always prevent webview menu
+      e.preventDefault();
+      // When pinned, also prevent native menu via the custom window procedure
+      if (pinned) {
+        return false;
+      }
+    };
+
+    document.addEventListener('contextmenu', handleContextMenu);
+    return () => document.removeEventListener('contextmenu', handleContextMenu);
+  }, [pinned]);
+
   useEffect(() => {
     let unlistenMedia: (() => void) | null = null;
     let unlistenPosition: (() => void) | null = null;
@@ -188,12 +209,12 @@ export default function LyricsPage() {
       unlistenMedia = await listen<MediaUpdatePayload>('media-updated', async (event) => {
         const { title, artist, albumTitle, durationMs } = event.payload;
         const trackKey = `${artist}|${title}`;
-        
+
         // Only fetch if the track actually changed
         if (trackKey === currentTrackKey) {
           return;
         }
-        
+
         currentTrackKey = trackKey;
         setLastFetchParams({ title, artist, album: albumTitle, duration: durationMs });
         await fetchLyrics(title, artist, albumTitle, durationMs);
@@ -218,7 +239,7 @@ export default function LyricsPage() {
       if (unlistenMedia) unlistenMedia();
       if (unlistenPosition) unlistenPosition();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const renderLyrics = () => {
@@ -283,13 +304,12 @@ export default function LyricsPage() {
             const actualIdx = startIdx + idx;
             const nextLine = parsedLyrics[actualIdx + 1];
             const isActive = currentPosition >= line.timestamp && (!nextLine || currentPosition < nextLine.timestamp);
-            
+
             return (
               <div
                 key={actualIdx}
-                className={`text-center leading-tight text-[15px] ${
-                  isActive ? 'lyric-line-active' : 'lyric-line-inactive'
-                }`}
+                className={`text-center leading-tight text-[15px] ${isActive ? 'lyric-line-active' : 'lyric-line-inactive'
+                  }`}
                 style={{
                   color: isActive ? 'rgba(255, 255, 255, 1)' : 'rgba(255, 255, 255, 0.3)',
                   fontWeight: isActive ? 600 : 400,
@@ -314,56 +334,38 @@ export default function LyricsPage() {
   return (
     <>
       <style>{styles}</style>
-      <div 
+      <div
         className="w-screen h-screen flex flex-col"
         style={{ background: 'rgba(0,0,0,0.85)', userSelect: 'none' } as never}
       >
-      {/* Header with controls */}
-      <div 
-        className="flex items-center justify-between px-3 py-1.5 border-b border-white/10"
-        style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
-      >
-        <div className="text-white/60 text-sm font-medium">Lyrics</div>
-        <div className="flex gap-2" style={{ WebkitAppRegion: 'no-drag' } as never}>
-          {/* Pin button */}
-          <button
-            onClick={handlePinToggle}
-            className="relative w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 transition-colors flex items-center justify-center overflow-hidden"
-          >
-            {pinned ? (
-              <Pin size={14} className="text-white" />
-            ) : (
-              <PinOff size={14} className="text-white/80" />
-            )}
-            {ripples.map((ripple) => (
-              <span
-                key={ripple.id}
-                className="absolute rounded-full bg-white/30 animate-ripple"
-                style={{
-                  width: ripple.size * 2,
-                  height: ripple.size * 2,
-                  left: ripple.x - ripple.size,
-                  top: ripple.y - ripple.size,
-                }}
-              />
-            ))}
-          </button>
-          
-          {/* Close button */}
-          <button
-            onClick={handleClose}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-red-500/80 transition-colors flex items-center justify-center"
-          >
-            <X size={14} className="text-white" />
-          </button>
+        {/* Header with controls */}
+        <div
+          className="flex items-center justify-between px-3 py-2.5 border-b border-white/10"
+          style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
+        >
+          <div className="text-white/60 text-sm font-medium">
+            <span>Lyrics provided by </span>
+            <a
+              href="https://lrclib.net"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-bold text-white"
+              style={{ WebkitAppRegion: 'no-drag' } as never}
+              title="https://lrclib.net"
+            >
+              LRC Library
+            </a>
+          </div>
+          <div className="flex gap-2" style={{ WebkitAppRegion: 'no-drag' } as never}>
+            <WindowControls pinned={pinned} onPinToggle={handlePinToggle} onClose={handleClose} ripples={ripples} />
+          </div>
+        </div>
+
+        {/* Lyrics content */}
+        <div className="flex-1 overflow-hidden" style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}>
+          {renderLyrics()}
         </div>
       </div>
-
-      {/* Lyrics content */}
-      <div className="flex-1 overflow-hidden">
-        {renderLyrics()}
-      </div>
-    </div>
     </>
   );
 }

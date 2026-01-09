@@ -1,6 +1,6 @@
 'use client';
 
-import { StyledImage } from './StyledImage';
+import { StyledImage } from '../StyledImage';
 
 interface AlbumArtProps {
     imageSrc: string | null;

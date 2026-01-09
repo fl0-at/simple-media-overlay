@@ -9,9 +9,9 @@ import { AlbumArt } from './AlbumArt';
 import { MediaInfo } from './MediaInfo';
 import { MediaTimeline } from './MediaTimeline';
 import { MediaControls } from './MediaControls';
-import { PinButton } from './PinButton';
+import { WindowControls } from '../WindowControls';
 import UpdateNotification from './UpdateNotification';
-import { StyledImage } from './StyledImage';
+import { StyledImage } from '../StyledImage';
 import { getPlayerInfo } from './appInfo';
 import { ListMusic, Loader2 } from 'lucide-react';
 
@@ -103,11 +103,11 @@ export default function OverlayPage() {
   const [isFading, setIsFading] = useState(false);
   const [animationKey, setAnimationKey] = useState(0);
   const previousTitleRef = useRef<string | undefined>(undefined);
-  
+
   // App switch animation state
   const [appSwitchDirection, setAppSwitchDirection] = useState<'up' | 'down' | null>(null);
   const [appSwitchAnimating, setAppSwitchAnimating] = useState(false);
-  
+
   const lastSourceAppIdRef = useRef<string | null>(null);
   const [frozenSnapshot, setFrozenSnapshot] = useState<MediaSnapshotDto | null>(null);
   const previousSnapshotRef = useRef<MediaSnapshotDto | null>(null);
@@ -119,6 +119,23 @@ export default function OverlayPage() {
 
   // Pin button ripple
   const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number; size: number }>>([]);
+  // Lyrics toggle button ripple
+  const [lyricsRipples, setLyricsRipples] = useState<Array<{ id: number; x: number; y: number; size: number }>>([]);
+
+  // Disable context menu when pinned (allow native Windows menu when unpinned)
+  useEffect(() => {
+    const handleContextMenu = (e: Event) => {
+      if (pinned) {
+        e.preventDefault();
+        return false;
+      }
+    };
+
+    document.addEventListener('contextmenu', handleContextMenu);
+    return () => {
+      document.removeEventListener('contextmenu', handleContextMenu);
+    };
+  }, [pinned]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -139,17 +156,17 @@ export default function OverlayPage() {
     listen<MediaSnapshotDto>('media_snapshot', (event) => {
       const newSourceAppId = event.payload.source_app_id ?? null;
       const currentSourceAppId = currentSnapshotRef.current?.source_app_id ?? null;
-      
+
       // Check if this is an app switch
       if (currentSourceAppId !== null && newSourceAppId !== currentSourceAppId) {
-        
+
         // Store both old and new snapshots
         previousSnapshotRef.current = currentSnapshotRef.current;
         pendingSnapshotRef.current = event.payload;
-        
+
         // DON'T update currentSnapshotRef yet - we need it to stay as the old snapshot
         // for the freeze to work correctly. It will be updated in the effect.
-        
+
         // Trigger the app switch effect
         setAppSwitchTrigger(prev => prev + 1);
       } else {
@@ -157,7 +174,7 @@ export default function OverlayPage() {
         previousSnapshotRef.current = currentSnapshotRef.current;
         currentSnapshotRef.current = event.payload;
         setSnapshot(event.payload);
-        
+
         // Emit event for lyrics window
         emit('media-updated', {
           title: event.payload.props.title,
@@ -166,6 +183,18 @@ export default function OverlayPage() {
           durationMs: event.payload.duration_ms,
           positionMs: event.payload.position_ms,
         });
+
+        // If this is the first snapshot and position seems incorrect (null or 0) while playing,
+        // request a refresh after a short delay to get accurate position
+        if (!currentSnapshotRef.current &&
+          event.payload.is_playing &&
+          event.payload.duration_ms &&
+          event.payload.duration_ms > 0 &&
+          (!event.payload.position_ms || event.payload.position_ms === 0)) {
+          setTimeout(() => {
+            invoke('refresh_media_snapshot').catch(() => { });
+          }, 200);
+        }
       }
     }).then((u) => {
       unlisten = u;
@@ -202,13 +231,13 @@ export default function OverlayPage() {
         const next = prev + deltaMs;
         const maxElapsed = durationMs - positionMs;
         const newPosition = Math.min(next, maxElapsed);
-        
+
         // Emit position update to lyrics window every 100ms
         if (now - lastEmitTime >= 100) {
           emit('playback-position', { positionMs: positionMs + newPosition });
           lastEmitTime = now;
         }
-        
+
         return newPosition;
       });
 
@@ -301,19 +330,19 @@ export default function OverlayPage() {
     if (pendingSnapshotRef.current) {
       const newSourceAppId = pendingSnapshotRef.current.source_app_id ?? null;
       const currentSourceAppId = currentSnapshotRef.current?.source_app_id ?? null;
-      
+
       // Determine direction based on alphabetical order of app IDs
       const previous = currentSourceAppId || '';
       const current = newSourceAppId || '';
       const direction = current.localeCompare(previous) > 0 ? 'down' : 'up';
-      
+
       // Freeze the current (old) snapshot
       setFrozenSnapshot(currentSnapshotRef.current);
       setAppSwitchDirection(direction);
       setIsFading(true);
       setIsAnimating(true);
       setAppSwitchAnimating(false);
-      
+
       // After grey-out, update to new snapshot but keep it frozen
       const slideOutTimer = setTimeout(() => {
         const pending = pendingSnapshotRef.current;
@@ -332,7 +361,7 @@ export default function OverlayPage() {
           });
         });
       }, 175);
-      
+
       // Clean up animation states
       const cleanupTimer = setTimeout(() => {
         setIsAnimating(false);
@@ -341,7 +370,7 @@ export default function OverlayPage() {
         setPlayElapsedMs(0);
         pendingSnapshotRef.current = null; // Clear it here after full animation
       }, 475);
-      
+
       return () => {
         clearTimeout(slideOutTimer);
         clearTimeout(cleanupTimer);
@@ -945,15 +974,13 @@ export default function OverlayPage() {
 
   const handlePinToggle = (e: MouseEvent<HTMLButtonElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
     const size = Math.max(rect.width, rect.height);
 
-    // Create ripple effect
+    // Create ripple effect with relative coordinates (button center)
     const newRipple = {
       id: Date.now(),
-      x: centerX,
-      y: centerY,
+      x: rect.width / 2,
+      y: rect.height / 2,
       size: size,
     };
 
@@ -964,26 +991,24 @@ export default function OverlayPage() {
 
   const handleLyricOverlayToggle = async (e: MouseEvent<HTMLButtonElement>): Promise<void> => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
     const size = Math.max(rect.width, rect.height);
 
-    // Create ripple effect
+    // Create ripple effect with relative coordinates (button center)
     const newRipple = {
       id: Date.now(),
-      x: centerX,
-      y: centerY,
+      x: rect.width / 2,
+      y: rect.height / 2,
       size: size,
     };
 
-    setRipples([newRipple]);
-    setTimeout(() => setRipples([]), 600);
+    setLyricsRipples([newRipple]);
+    setTimeout(() => setLyricsRipples([]), 600);
 
     try {
       if (!lyricsOverlayOpen) {
         // Create or show lyrics window
         const existingWindow = await WebviewWindow.getByLabel('lyrics');
-        
+
         if (existingWindow) {
           await existingWindow.show();
           await existingWindow.setFocus();
@@ -1002,8 +1027,8 @@ export default function OverlayPage() {
             titleBarStyle: 'overlay',
             hiddenTitle: true,
           });
-          
-          // Show and focus after a brief delay to ensure window is ready
+
+          // Configure window context menu after creation
           setTimeout(async () => {
             try {
               await lyricsWindow.show();
@@ -1012,6 +1037,7 @@ export default function OverlayPage() {
               console.error('Error showing lyrics window:', err);
             }
           }, 100);
+
         }
         setLyricsOverlayOpen(true);
       } else {
@@ -1068,12 +1094,12 @@ export default function OverlayPage() {
       className="w-screen h-screen flex items-center flex-start gap-1 flex-row px-2 py-1.5"
       style={{ background: 'rgba(0,0,0,0.75)', WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
     >
+
       {hasActiveMedia ? (
         <>
           <div
             key={`album-${animationKey}`}
-            className={`flex items-center gap-1 ${
-              isFading && appSwitchDirection
+            className={`flex items-center gap-1 ${isFading && appSwitchDirection
                 ? appSwitchDirection === 'up'
                   ? 'app-slide-out-up opacity-30'
                   : 'app-slide-out-down opacity-30'
@@ -1089,7 +1115,6 @@ export default function OverlayPage() {
                         : 'track-slide-in-next'
                       : ''
               } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
-            style={{ display: 'flex', overflow: 'hidden' }}
           >
             <AlbumArt imageSrc={imageSrc} albumTitle={effectiveAlbumTitle} pinned={pinned} imageKey={imageKey} />
           </div>
@@ -1098,8 +1123,7 @@ export default function OverlayPage() {
           <StyledImage
             src={getPlayerInfo(frozenSnapshot?.source_app_id ?? sourceAppId).imageSrc}
             alt={getPlayerInfo(frozenSnapshot?.source_app_id ?? sourceAppId).name}
-            className={`w-9 h-9 fixed bottom-1.5 left-1 ${
-              isFading && appSwitchDirection
+            className={`w-9 h-9 fixed bottom-1.5 left-1 ${isFading && appSwitchDirection
                 ? appSwitchDirection === 'up'
                   ? 'app-slide-out-down opacity-30'
                   : 'app-slide-out-up opacity-30'
@@ -1117,28 +1141,41 @@ export default function OverlayPage() {
 
           {/* Lyrics overlay button */}
           <button
-            className={`w-9 h-9 fixed bottom-2.25 left-20 px-3 py-1 rounded-full text-xs font-semibold min-w-10 transition-colors ${
-              lyricsOverlayOpen
+            className={`w-9 h-9 fixed bottom-2.25 left-20 rounded-full flex items-center justify-center transition-colors overflow-hidden ${lyricsOverlayOpen
                 ? 'bg-white hover:bg-white/80 text-black'
                 : lyricsLoading
-                ? 'bg-black/60 text-white/60'
-                : lyricsAvailable
-                ? 'bg-black/60 hover:bg-black/70 text-white'
-                : 'bg-black/60 hover:bg-black/70 text-red-400'
-            }`}
+                  ? 'bg-black/60 text-white/60'
+                  : lyricsAvailable
+                    ? 'bg-black/60 hover:bg-black/70 text-white'
+                    : 'bg-black/60 hover:bg-black/70 text-red-400'
+              }`}
             onClick={handleLyricOverlayToggle}
             title={lyricsLoading ? 'Loading...' : lyricsAvailable ? 'Lyrics' : 'No lyrics available'}
+            style={{ WebkitAppRegion: 'no-drag' } as never}
           >
             {lyricsLoading ? (
               <Loader2 size={16} className="animate-spin" />
             ) : (
               <ListMusic size={16} />
             )}
+            {/* Ripple effects */}
+            {lyricsRipples.map((ripple) => (
+              <span
+                key={ripple.id}
+                className="absolute rounded-full bg-white/30 animate-ripple pointer-events-none"
+                style={{
+                  width: ripple.size * 2,
+                  height: ripple.size * 2,
+                  left: ripple.x - ripple.size,
+                  top: ripple.y - ripple.size,
+                  zIndex: 10,
+                }}
+              />
+            ))}
           </button>
 
           <div
-            className={`flex flex-col content-center justify-center shrink-0 transition-opacity duration-150 ${
-              isFading && appSwitchDirection
+            className={`flex flex-col content-center justify-center shrink-0 transition-opacity duration-150 ${isFading && appSwitchDirection
                 ? appSwitchDirection === 'up'
                   ? 'app-slide-out-up opacity-30'
                   : 'app-slide-out-down opacity-30'
@@ -1156,13 +1193,17 @@ export default function OverlayPage() {
               } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
             style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag', width: '280px', height: '128px', overflow: 'hidden' } as never}
           >
-            <div className="flex flex-row w-full">
+            {/* Container for media info and window controls */}
+            <div className="flex flex-row justify-between">
               <MediaInfo
                 title={TitleComponent}
                 artist={ArtistComponent}
                 pinned={pinned}
               />
-              <PinButton pinned={pinned} onToggle={handlePinToggle} />
+              {/* Pin and Close buttons - top right corner */}
+              <div className="flex flex-col content-start top-2 right-2.5 z-99" style={{ WebkitAppRegion: 'no-drag' } as never}>
+                <WindowControls pinned={pinned} onPinToggle={handlePinToggle} ripples={ripples} />
+              </div>
             </div>
 
             <MediaTimeline
@@ -1201,21 +1242,6 @@ export default function OverlayPage() {
         </div>
       )}
       <UpdateNotification />
-
-      {/* Ripple effects - rendered at root level to avoid clipping */}
-      {ripples.map((ripple) => (
-        <div
-          key={ripple.id}
-          className="ripple-effect"
-          style={{
-            position: 'fixed',
-            left: ripple.x - ripple.size / 2,
-            top: ripple.y - ripple.size / 2,
-            width: ripple.size,
-            height: ripple.size,
-          }}
-        />
-      ))}
     </div>
   );
 }

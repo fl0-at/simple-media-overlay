@@ -11,7 +11,7 @@ interface MediaInfoProps {
 export function MediaInfo({ title, artist, pinned }: MediaInfoProps) {
   return (
     <div
-      className="flex items-center gap-0.5 flex-col w-10/12 min-w-10/12 h-12"
+      className="flex items-center gap-0.5 flex-col w-9/13 min-w-9/13 h-12"
       style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
     >
       {title}
