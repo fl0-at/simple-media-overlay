@@ -1,6 +1,6 @@
 'use client';
 
-import { Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward } from 'lucide-react';
+import { Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Loader2 } from 'lucide-react';
 import { isPlaybackModeSupported } from './appInfo';
 
 type RepeatMode = 'none' | 'track' | 'list';
@@ -12,6 +12,7 @@ interface MediaControlsProps {
   sourceAppId: string | null;
   pinned: boolean;
   playPauseImpact?: boolean;
+  playbackLoading?: boolean;
   onPlayPause: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onPrevious: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onNext: (e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -26,6 +27,7 @@ export function MediaControls({
   sourceAppId,
   pinned,
   playPauseImpact = false,
+  playbackLoading = false,
   onPlayPause,
   onPrevious,
   onNext,
@@ -84,7 +86,7 @@ export function MediaControls({
         style={{ WebkitAppRegion: 'no-drag' } as never}
         title={isPlaying ? 'Pause' : 'Play'}
       >
-        {isPlaying ? <Pause /> : <Play />}
+        {playbackLoading ? <Loader2 className="animate-spin" /> : isPlaying ? <Pause /> : <Play />}
       </button>
       <button
         className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"

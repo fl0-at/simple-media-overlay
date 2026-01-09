@@ -49,7 +49,7 @@ async function sendControl(action: 'playPause' | 'next' | 'previous', setDirecti
     }
 
     await invoke('control_media', { action });
-    if (action === 'next' || action === 'previous') {
+    if (action === 'next' || action === 'previous') {      
       // Immediate refresh
       await invoke('refresh_media_snapshot');
       // Additional delayed refresh to catch slow metadata updates from some apps (e.g., TIDAL)
@@ -96,6 +96,8 @@ export default function OverlayPage() {
   const [lyricsOverlayOpen, setLyricsOverlayOpen] = useState(false);
   const [lyricsAvailable, setLyricsAvailable] = useState(false);
   const [lyricsLoading, setLyricsLoading] = useState(false);
+  const [playbackLoading, setPlaybackLoading] = useState(false);
+  const playbackLoadingTimeoutRef = useRef<number | null>(null);
 
   // Track change animation state
   const [trackChangeDirection, setTrackChangeDirection] = useState<'next' | 'previous' | null>(null);
@@ -103,6 +105,7 @@ export default function OverlayPage() {
   const [isFading, setIsFading] = useState(false);
   const [animationKey, setAnimationKey] = useState(0);
   const previousTitleRef = useRef<string | undefined>(undefined);
+  const pendingTrackChangeRef = useRef<'next' | 'previous' | null>(null);
 
   // App switch animation state
   const [appSwitchDirection, setAppSwitchDirection] = useState<'up' | 'down' | null>(null);
@@ -298,6 +301,42 @@ export default function OverlayPage() {
     // Only animate if we have a previous title and it's different
     // AND we're not currently doing an app switch animation
     if (previousTitleRef.current && currentTitle && previousTitleRef.current !== currentTitle && !appSwitchDirection) {
+      // Clear spinner if pending next/previous
+      if (pendingTrackChangeRef.current) {
+        setPlaybackLoading(false);
+        pendingTrackChangeRef.current = null;
+        if (playbackLoadingTimeoutRef.current !== null) {
+          clearTimeout(playbackLoadingTimeoutRef.current);
+          playbackLoadingTimeoutRef.current = null;
+        }
+      }
+
+      // Log snapshot progress values for debugging
+
+      if (snapshot) {
+        // eslint-disable-next-line no-console
+        console.log('[Track Change Detected]', {
+          prevTitle: previousTitleRef.current,
+          newTitle: currentTitle,
+          position_ms: snapshot.position_ms,
+          duration_ms: snapshot.duration_ms,
+          is_playing: snapshot.is_playing,
+        });
+
+        // Workaround: If position_ms is unusually high after a track change, request a new snapshot
+        const duration = snapshot.duration_ms || 0;
+        const position = snapshot.position_ms || 0;
+        // Consider >10% of duration or >5s as suspicious for a new track
+        if (
+          duration > 0 &&
+          position > 0 &&
+          (position > duration * 0.1 || position > 5000)
+        ) {          
+          console.warn('[Track Change Workaround] Unusually high position_ms after track change, requesting new snapshot...', { position, duration });
+          invoke('refresh_media_snapshot').catch(() => { });
+        }
+      }
+
       // If no direction was set (external control), default to 'next'
       if (!trackChangeDirection) {
         setTrackChangeDirection('next');
@@ -323,6 +362,7 @@ export default function OverlayPage() {
     } else if (currentTitle) {
       previousTitleRef.current = currentTitle;
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTitle, trackChangeDirection, appSwitchDirection]);
 
   // Detect app switches (sourceAppId changes)
@@ -387,6 +427,7 @@ export default function OverlayPage() {
     if (previousPlayStateRef.current !== undefined && currentPlayState !== previousPlayStateRef.current) {
       setPlayPauseImpact(true);
       setTimeout(() => setPlayPauseImpact(false), 300);
+      setPlaybackLoading(false);
     }
 
     previousPlayStateRef.current = currentPlayState;
@@ -639,7 +680,6 @@ export default function OverlayPage() {
       inner.style.removeProperty('transform');
       inner.style.removeProperty('animation');
       inner.style.removeProperty('animation-iteration-count');
-      inner.style.removeProperty('animation-fill-mode');
       inner.style.removeProperty('opacity');
       titleHasPlayedRef.current = false;
     };
@@ -882,7 +922,6 @@ export default function OverlayPage() {
       inner.style.removeProperty('transform');
       inner.style.removeProperty('animation');
       inner.style.removeProperty('animation-iteration-count');
-      inner.style.removeProperty('animation-fill-mode');
       inner.style.removeProperty('opacity');
       artistHasPlayedRef.current = false;
     };
@@ -960,11 +999,45 @@ export default function OverlayPage() {
 
   const handleProgressClick = (e: MouseEvent<HTMLDivElement>) => {
     if (!hasTimeline || !durationMs) return;
+
+    if (playbackLoadingTimeoutRef.current !== null) {
+      clearTimeout(playbackLoadingTimeoutRef.current);
+      playbackLoadingTimeoutRef.current = null;
+    }
+    setPlaybackLoading(true);
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
     const x = e.clientX - rect.left;
     const fraction = Math.min(1, Math.max(0, x / rect.width));
     const targetMs = Math.round(durationMs * fraction);
     sendSeek(targetMs);
+    playbackLoadingTimeoutRef.current = window.setTimeout(() => {
+      setPlaybackLoading(false);
+      playbackLoadingTimeoutRef.current = null;
+    }, 300);
+  };
+
+  // Helper to show loading spinner for next/previous
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handlePrevious = (e: MouseEvent<HTMLButtonElement>) => {
+    setPlaybackLoading(true);
+    pendingTrackChangeRef.current = 'previous';
+    sendControl('previous', setTrackChangeDirection, setIsFading);
+    // If track doesn't change within 500ms, clear spinner
+    playbackLoadingTimeoutRef.current = window.setTimeout(() => {
+      if (pendingTrackChangeRef.current === 'previous') {
+        setPlaybackLoading(false);
+        pendingTrackChangeRef.current = null;
+        playbackLoadingTimeoutRef.current = null;
+      }
+    }, 500);
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handleNext = (e: MouseEvent<HTMLButtonElement>) => {
+    setPlaybackLoading(true);
+    pendingTrackChangeRef.current = 'next';
+    sendControl('next', setTrackChangeDirection, setIsFading);
+    // Spinner will be cleared on track change
   };
 
   const triggerRipple = (e: MouseEvent<HTMLButtonElement>) => {
@@ -1224,9 +1297,10 @@ export default function OverlayPage() {
               sourceAppId={sourceAppId}
               pinned={pinned}
               playPauseImpact={playPauseImpact}
+              playbackLoading={playbackLoading}
               onPlayPause={withRipple(handlePlayPause)}
-              onPrevious={withRipple(() => sendControl('previous', setTrackChangeDirection, setIsFading))}
-              onNext={withRipple(() => sendControl('next', setTrackChangeDirection, setIsFading))}
+              onPrevious={withRipple(handlePrevious)}
+              onNext={withRipple(handleNext)}
               onShuffle={withRipple(() => sendPlaybackMode('shuffle', !isShuffle))}
               onRepeat={withRipple(() => {
                 const current = snapshot?.repeat_mode ?? 'none';
