@@ -6,7 +6,7 @@ I wanted to build a simple media overlay app that stays on top, so I vibe-coded 
 
 ![Simple Media Overlay](./assets/SimpleMediaOverlay.png)
 
-I decided to add a second overlay that displays synced lyrics, if available, since I found [LCR Library](https://lrclib.net) and [their repo on GitHub](https://github.com/tranxuanthang/lrclib) - here's how that overlay looks:
+I decided to add a second overlay that displays synced lyrics, if available, since I found [LRC Library](https://lrclib.net) and [their repo on GitHub](https://github.com/tranxuanthang/lrclib) - here's how that overlay looks:
 
 ![Simple Media Overlay - Lyrics Overlay](./assets/SimpleMediaOverlay_Lyrics.png)
 
