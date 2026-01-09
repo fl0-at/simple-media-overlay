@@ -287,10 +287,13 @@ export default function LyricsPage() {
 
     // Show synced lyrics if available
     if (parsedLyrics.length > 0) {
+      // Show lyrics slightly ahead of actual position for better reading experience
+      const LYRICS_OFFSET_MS = 250;
+      const adjustedPosition = currentPosition + LYRICS_OFFSET_MS;
       // Find current line index
       const currentIndex = parsedLyrics.findIndex((line, idx) => {
         const nextLine = parsedLyrics[idx + 1];
-        return currentPosition >= line.timestamp && (!nextLine || currentPosition < nextLine.timestamp);
+        return adjustedPosition >= line.timestamp && (!nextLine || adjustedPosition < nextLine.timestamp);
       });
 
       // Show previous, current, and next lines
@@ -303,7 +306,7 @@ export default function LyricsPage() {
           {visibleLines.map((line, idx) => {
             const actualIdx = startIdx + idx;
             const nextLine = parsedLyrics[actualIdx + 1];
-            const isActive = currentPosition >= line.timestamp && (!nextLine || currentPosition < nextLine.timestamp);
+            const isActive = adjustedPosition >= line.timestamp && (!nextLine || adjustedPosition < nextLine.timestamp);
 
             return (
               <div
