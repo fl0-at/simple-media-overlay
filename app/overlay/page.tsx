@@ -1015,11 +1015,11 @@ export default function OverlayPage() {
         } else {
           const lyricsWindow = new WebviewWindow('lyrics', {
             url: '/lyrics',
-            title: '',
+            title: 'Lyrics provided by LRC Library',
             width: 408,
             height: 160,
             alwaysOnTop: true,
-            resizable: true,
+            resizable: false,
             decorations: false,
             visible: true,
             center: true,

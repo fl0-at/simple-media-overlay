@@ -89,7 +89,7 @@ export function MediaControls({
         <SkipBack />
       </button>
       <button
-        className={`px-3 py-1 rounded-full bg-white hover:bg-white/80 text-xs text-black font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''}`}
+        className={`px-3 py-1 rounded-full font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''} ${isPlaying ? 'bg-white text-xs text-black hover:bg-white/80' : 'bg-white/10 text-white hover:bg-white/20'}`}
         id="play-pause-button"
         onClick={onPlayPause}
         style={{ WebkitAppRegion: 'no-drag' } as never}
