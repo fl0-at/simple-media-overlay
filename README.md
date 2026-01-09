@@ -6,6 +6,21 @@ I wanted to build a simple media overlay app that stays on top, so I vibe-coded 
 
 ![Simple Media Overlay](./assets/SimpleMediaOverlay.png)
 
+I decided to add a second overlay that displays synced lyrics, if available, since I found [LCR Library](https://lrclib.net) and [their repo on GitHub](https://github.com/tranxuanthang/lrclib) - here's how that overlay looks:
+
+![Simple Media Overlay - Lyrics Overlay](./assets/SimpleMediaOverlay_Lyrics.png)
+
+## Features
+
+- 📻 Always-on-top overlay that displays currently playing media
+- ℹ️ Auto-scrolling for longer titles & artist names
+- 📍 Pin the overlay to avoid accidentally moving it, unpin to allow dragging again
+- 👀 Little icon in the bottom left corner of the album art, showing the source of the currently playing media
+- ⏯️ Play/Pause, Skip to next or previous track or use the seek bar to skip to a certain part of the currently playing media
+- 🔁 Toggle repeat mode and/or shuffle, [if supported by the player](#current-limitations)
+- 🎼 Toggle the _Lyrics Overlay_ to see synced lyrics, if available on [LRC Library](https://lrclib.net)
+- ✨ Fancy animations when the currently played media or the playback source changes, is played/paused or the overlay is pinned
+
 ## Prerequisites
 
 - **Windows 10 or Windows 11** - This app currently only works on Windows (see [Current Limitations](#current-limitations))
@@ -16,15 +31,6 @@ If you want to build from source or contribute to development:
 
 - **[Node.js](https://nodejs.org/)** (v18 or higher recommended)
 - **[Rust](https://www.rust-lang.org/tools/install)** and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
-
-## Features
-
-- 📻 Always-on-top overlay that displays currently playing media
-- 📍 Pin the overlay to avoid accidentally moving it, unpin to allow dragging again
-- 👀 Little icon in the bottom left corner of the album art, showing the source of the currently playing media
-- ⏯️ Play/Pause, Skip to next or previous track or use the seek bar to skip to a certain part of the currently playing media
-- ℹ️ Auto-scrolling for longer titles
-- ✨ Fancy animations when the currently played media changes, is played/paused or the overlay is pinned
 
 ## Running the overlay
 
@@ -117,6 +123,10 @@ This app is **currently Windows-only** because it relies on the [win-gsmtc](http
 I might switch to a cross-platform crate in the future to support macOS and Linux, but for now, Windows 10/11 is required. 🙂
 
 ## Troubleshooting
+
+**Timeline shows incorrect progress?**
+
+- This is currently a [known issue](https://github.com/fl0-at/simple-media-overlay/issues/4) that I am working on, so feel free to contribute if you spot the root cause of this problem
 
 **Media not showing up?**
 
