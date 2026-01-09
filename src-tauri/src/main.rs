@@ -25,7 +25,12 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{WM_CONTEXTMENU, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_SYSCOMMAND, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SC_SIZE, DefWindowProcW, SetWindowLongPtrW, CallWindowProcW, GWLP_WNDPROC, GetWindowLongPtrW, GWL_STYLE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, GetSystemMenu, DeleteMenu, MF_BYCOMMAND};
 
 #[cfg(target_os = "windows")]
-static mut OLD_WNDPROC: Option<isize> = None;
+use std::sync::Mutex as StdMutex2;
+
+#[cfg(target_os = "windows")]
+lazy_static::lazy_static! {
+    static ref OLD_WNDPROCS: StdMutex2<HashMap<isize, isize>> = StdMutex2::new(HashMap::new());
+}
 
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -44,8 +49,10 @@ unsafe extern "system" fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, l
         _ => {}
     }
     
-    // Call the original window procedure for all other messages
-    if let Some(old_proc) = OLD_WNDPROC {
+    // Call the original window procedure for this specific HWND
+    let old_procs = OLD_WNDPROCS.lock().unwrap();
+    if let Some(&old_proc) = old_procs.get(&(hwnd.0 as isize)) {
+        drop(old_procs);
         CallWindowProcW(
             Some(std::mem::transmute(old_proc)),
             hwnd,
@@ -54,6 +61,7 @@ unsafe extern "system" fn custom_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, l
             lparam,
         )
     } else {
+        drop(old_procs);
         DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 }
@@ -64,6 +72,31 @@ enum RepeatMode {
     None,
     Track,
     List,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LrcLibResponse {
+    id: Option<i64>,
+    #[serde(rename = "trackName")]
+    track_name: Option<String>,
+    #[serde(rename = "artistName")]
+    artist_name: Option<String>,
+    #[serde(rename = "albumName")]
+    album_name: Option<String>,
+    duration: Option<f64>,
+    instrumental: Option<bool>,
+    #[serde(rename = "plainLyrics")]
+    plain_lyrics: Option<String>,
+    #[serde(rename = "syncedLyrics")]
+    synced_lyrics: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LyricsResponse {
+    plain_lyrics: Option<String>,
+    synced_lyrics: Option<String>,
+    instrumental: bool,
 }
 
 fn with_current_session<F>(f: F) -> Result<(), String>
@@ -118,6 +151,160 @@ async fn set_repeat(mode: RepeatMode) -> Result<(), String> {
     set_repeat_sync(mode)
 }
 
+#[cfg(target_os = "windows")]
+#[tauri::command]
+async fn configure_window_menu(window: tauri::Window) -> Result<(), String> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    
+    if let Ok(handle) = window.window_handle() {
+        if let RawWindowHandle::Win32(win_handle) = handle.as_raw() {
+            unsafe {
+                let hwnd = HWND(win_handle.hwnd.get() as _);
+                
+                // Check if this window is already configured to avoid double-subclassing
+                {
+                    let old_procs = OLD_WNDPROCS.lock().unwrap();
+                    if old_procs.contains_key(&(hwnd.0 as isize)) {
+                        log::debug!("Window '{}' already configured, skipping", window.label());
+                        return Ok(());
+                    }
+                }
+                
+                // Remove maximize and minimize from window style
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                let new_style = style & !(WS_MAXIMIZEBOX.0 as isize) & !(WS_MINIMIZEBOX.0 as isize);
+                SetWindowLongPtrW(hwnd, GWL_STYLE, new_style);
+                
+                // Remove items from system menu
+                let hmenu = GetSystemMenu(hwnd, false);
+                if !hmenu.is_invalid() {
+                    DeleteMenu(hmenu, SC_MAXIMIZE, MF_BYCOMMAND).ok();
+                    DeleteMenu(hmenu, SC_MINIMIZE, MF_BYCOMMAND).ok();
+                    DeleteMenu(hmenu, SC_RESTORE, MF_BYCOMMAND).ok();
+                    DeleteMenu(hmenu, SC_SIZE, MF_BYCOMMAND).ok();
+                }
+                
+                // Subclass the window to intercept WM_CONTEXTMENU
+                let old_proc = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, custom_wndproc as isize);
+                let mut old_procs = OLD_WNDPROCS.lock().unwrap();
+                old_procs.insert(hwnd.0 as isize, old_proc);
+                drop(old_procs);
+                
+                log::info!("Window '{}' configured - HWND: {:?}", window.label(), hwnd);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn configure_window_menu(_window: tauri::Window) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+async fn fetch_lyrics(app: tauri::AppHandle, track_name: String, artist_name: String, album_name: Option<String>, duration_ms: Option<i64>, state: State<'_, Arc<MediaState>>) -> Result<LyricsResponse, String> {
+    
+    // Create cache key from artist and track name
+    let cache_key = format!("{}|{}", artist_name.to_lowercase(), track_name.to_lowercase());
+    
+    // Check cache first
+    {
+        let cache = state.lyrics_cache.lock().unwrap();
+        if let Some(cached_lyrics) = cache.get(&cache_key) {
+            return Ok(cached_lyrics.clone());
+        }
+    }
+    
+    // Build LRCLIB API URL
+    let base_url = "https://lrclib.net/api/get";
+    let mut url = format!("{}?track_name={}&artist_name={}", 
+        base_url,
+        urlencoding::encode(&track_name),
+        urlencoding::encode(&artist_name)
+    );
+    
+    if let Some(album) = album_name {
+        if !album.is_empty() {
+            url.push_str(&format!("&album_name={}", urlencoding::encode(&album)));
+        }
+    }
+    
+    if let Some(duration) = duration_ms {
+        // Convert ms to seconds
+        let duration_sec = (duration as f64 / 1000.0).round() as i64;
+        url.push_str(&format!("&duration={}", duration_sec));
+    }
+    
+    // Determine app version for User-Agent
+    let version = app.package_info().version.to_string();   
+
+    // Debug log the request
+    #[cfg(debug_assertions)]
+    {
+        log::debug!("fetch_lyrics: GET {} with User-Agent: simple-media-overlay v{} (https://github.com/fl0-at/simple-media-overlay)", url, version);
+    }
+
+    // Create HTTP client
+    let client = reqwest::Client::new();
+    
+    // Make the HTTP request
+    let response = client
+        .get(&url)
+        .header("User-Agent", format!("simple-media-overlay v{} (https://github.com/fl0-at/simple-media-overlay)", version))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                "Request timed out. Please check your internet connection.".to_string()
+            } else if e.is_connect() {
+                "Cannot connect to lyrics service. Please check your internet connection.".to_string()
+            } else {
+                format!("Network error: {}", e)
+            }
+        })?;
+    
+    let status = response.status();
+    
+    if status.is_success() {
+        let lrclib_data: LrcLibResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse lyrics response: {}", e))?;
+        
+        let lyrics_response = LyricsResponse {
+            plain_lyrics: lrclib_data.plain_lyrics,
+            synced_lyrics: lrclib_data.synced_lyrics,
+            instrumental: lrclib_data.instrumental.unwrap_or(false),
+        };
+        
+        // Cache the result
+        {
+            let mut cache = state.lyrics_cache.lock().unwrap();
+            cache.insert(cache_key, lyrics_response.clone());
+        }
+        
+        Ok(lyrics_response)
+    } else if status.as_u16() == 404 {
+        // No lyrics found - don't cache 404s to allow retrying if lyrics are added later
+        Err("No lyrics found".to_string())
+    } else if status.as_u16() == 429 {
+        // Rate limited - don't cache this
+        Err("Rate limit exceeded. Please try again later.".to_string())
+    } else if status.is_client_error() {
+        // 4xx errors (except 404 and 429)
+        Err(format!("Invalid request (HTTP {} \"{}\"). Please try a different song.", status.as_u16(), response.text().await.unwrap_or_default()))
+    } else if status.is_server_error() {
+        // 5xx errors - server issues
+        Err(format!("Lyrics service temporarily unavailable ({}). Please try again later.", status.as_u16()))
+    } else {
+        // Unexpected status
+        Err(format!("Unexpected response from lyrics service: {}", status))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 struct MediaPropsDto {
     title: String,
@@ -146,6 +333,8 @@ struct MediaState {
     thumbnail_cache: StdMutex<HashMap<String, String>>,
     // Track the last title we successfully cached a thumbnail for (to detect stale fetches)
     last_cached_title: Mutex<Option<String>>,
+    // Cache of lyrics keyed by (artist|title)
+    lyrics_cache: StdMutex<HashMap<String, LyricsResponse>>,
 }
 
 #[tauri::command]
@@ -675,7 +864,25 @@ async fn refresh_media_snapshot(
         .GetCurrentSession()
         .map_err(|e| format!("GetCurrentSession failed: {e:?}"))?;
 
-    let snap = snapshot_from_session(&session, Some(&state.thumbnail_cache), None, None)?;
+    // Get previous snapshot data to preserve thumbnail cache and title
+    let (prev_thumbnail, prev_title) = {
+        let snapshot_guard = state.snapshot.lock().await;
+        if let Some(ref prev_snap) = *snapshot_guard {
+            (
+                prev_snap.props.album_image.clone(),
+                Some(prev_snap.props.title.clone())
+            )
+        } else {
+            (None, None)
+        }
+    };
+
+    let snap = snapshot_from_session(
+        &session, 
+        Some(&state.thumbnail_cache),
+        prev_thumbnail.as_ref(),
+        prev_title.as_deref()
+    )?;
 
     let mut snapshot_guard = state.snapshot.lock().await;
     *snapshot_guard = Some(snap.clone());
@@ -726,10 +933,22 @@ fn main() {
             set_shuffle,
             set_repeat,
             seek_to,
-            refresh_media_snapshot
+            refresh_media_snapshot,
+            fetch_lyrics,
+            configure_window_menu
         ])
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_shell::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // When the main window is closed, quit the entire application
+                if window.label() == "main" {
+                    log::info!("Main window close requested, quitting application");
+                    std::process::exit(0);
+                }
+            }
+        })
         .setup(|app| {
             #[cfg(target_os = "windows")]
             {
@@ -741,6 +960,7 @@ fn main() {
                     splash.show().ok();
                 }
                 
+                // Configure main window only (lyrics window is created dynamically and configured separately)
                 if let Some(window) = app.get_webview_window("main") {
                     // Get both window and webview HWNDs to disable context menu
                     if let Ok(handle) = window.window_handle() {
@@ -764,12 +984,17 @@ fn main() {
                                 
                                 // Subclass the window to intercept WM_CONTEXTMENU
                                 let old_proc = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, custom_wndproc as isize);
-                                OLD_WNDPROC = Some(old_proc);
+                                let mut old_procs = OLD_WNDPROCS.lock().unwrap();
+                                old_procs.insert(hwnd.0 as isize, old_proc);
+                                drop(old_procs);
                                 
-                                log::info!("Window subclassed to disable context menu - HWND: {:?}", hwnd);
+                                log::info!("Window 'main' configured - HWND: {:?}", hwnd);
                             }
                         }
                     }
+                }
+                
+                if let Some(window) = app.get_webview_window("main") {
                     
                     // Show main window after 1 second and close splash screen
                     let window_clone = window.clone();

@@ -9,7 +9,7 @@ interface StyledImageProps {
   className: string;
   width: number;
   height: number;
-  pinned?: boolean;
+  pinned: boolean;
   unoptimized?: boolean;
   fadeIn?: boolean;
 }
@@ -20,7 +20,7 @@ export function StyledImage({
   className,
   width,
   height,
-  pinned = false,
+  pinned,
   unoptimized = true,
   fadeIn = false,
 }: StyledImageProps) {

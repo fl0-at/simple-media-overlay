@@ -1,5 +1,6 @@
 'use client';
 
+import { Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Loader2 } from 'lucide-react';
 import { isPlaybackModeSupported } from './appInfo';
 
 type RepeatMode = 'none' | 'track' | 'list';
@@ -11,11 +12,12 @@ interface MediaControlsProps {
   sourceAppId: string | null;
   pinned: boolean;
   playPauseImpact?: boolean;
-  onPlayPause: () => void;
-  onPrevious: () => void;
-  onNext: () => void;
-  onShuffle: (value: boolean) => void;
-  onRepeat: (mode: RepeatMode) => void;
+  playbackLoading?: boolean;
+  onPlayPause: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onPrevious: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onNext: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onShuffle: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onRepeat: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }
 
 export function MediaControls({
@@ -25,6 +27,7 @@ export function MediaControls({
   sourceAppId,
   pinned,
   playPauseImpact = false,
+  playbackLoading = false,
   onPlayPause,
   onPrevious,
   onNext,
@@ -33,24 +36,13 @@ export function MediaControls({
 }: MediaControlsProps) {
   const showPlaybackModes = isPlaybackModeSupported(sourceAppId);
 
-  const handleRepeatClick = () => {
-    // Cycle: none -> list -> track -> none
-    if (repeatMode === 'none') {
-      onRepeat('list');
-    } else if (repeatMode === 'list') {
-      onRepeat('track');
-    } else {
-      onRepeat('none');
-    }
-  };
-
   const getRepeatIcon = () => {
     if (repeatMode === 'track') {
-      return '🔂'; // repeat one
+      return <Repeat1 />; // repeat once
     } else if (repeatMode === 'list') {
-      return '🔁'; // repeat all
+      return <Repeat />; // repeat all
     } else {
-      return '🔁'; // repeat off (same icon but different style)
+      return <Repeat />; // repeat off (same icon but different style)
     }
   };
 
@@ -65,55 +57,60 @@ export function MediaControls({
       {showPlaybackModes && (
         <button
           className={
-            'px-2 py-1 rounded-full text-xs ' +
+            'px-2 py-1 rounded-full min-w-10 text-xs ' +
             (repeatMode !== 'none'
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
           }
-          onClick={handleRepeatClick}
+          onClick={onRepeat}
           id="repeat-button"
           style={{ WebkitAppRegion: 'no-drag' } as never}
+          title="Repeat Mode"
         >
           {getRepeatIcon()}
         </button>
       )}
       <button
-        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
+        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="back-button"
         onClick={onPrevious}
         style={{ WebkitAppRegion: 'no-drag' } as never}
+        title="Previous"
       >
-        I◀◀
+        <SkipBack />
       </button>
       <button
-        className={`px-3 py-1 rounded-full bg-white hover:bg-white/80 text-xs text-black font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''}`}
+        className={`px-3 py-1 rounded-full font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''} ${isPlaying ? 'bg-white text-xs text-black hover:bg-white/80' : 'bg-white/10 text-white hover:bg-white/20'}`}
         id="play-pause-button"
         onClick={onPlayPause}
         style={{ WebkitAppRegion: 'no-drag' } as never}
+        title={isPlaying ? 'Pause' : 'Play'}
       >
-        {isPlaying ? ' ⏸ ' : ' ▶ '}
+        {playbackLoading ? <Loader2 className="animate-spin" /> : isPlaying ? <Pause /> : <Play />}
       </button>
       <button
-        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
+        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="next-button"
         onClick={onNext}
         style={{ WebkitAppRegion: 'no-drag' } as never}
+        title="Next"
       >
-        ▶▶I
+        <SkipForward />
       </button>
       {showPlaybackModes && (
         <button
           className={
-            'px-2 py-1 rounded-full text-xs ' +
+            'px-2 py-1 rounded-full min-w-10 text-xs ' +
             (isShuffle
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
           }
-          onClick={() => onShuffle(!isShuffle)}
+          onClick={onShuffle}
           id="shuffle-button"
           style={{ WebkitAppRegion: 'no-drag' } as never}
+          title="Shuffle"
         >
-          🔀
+          <Shuffle />
         </button>
       )}
     </div>
