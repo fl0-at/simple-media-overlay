@@ -78,7 +78,7 @@ export default function UpdateNotification({ onDismiss }: UpdateNotificationProp
 
   if (justUpdated) {
     return (
-      <div className="fixed top-4 right-4 bg-purple-500/90 text-white px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm max-w-sm animate-slide-in">
+      <div className="fixed top-4 right-4 bg-purple-500/90 text-white px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm max-w-sm animate-slide-in z-500">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="font-semibold">🎉 Successfully Updated!</p>
@@ -91,7 +91,7 @@ export default function UpdateNotification({ onDismiss }: UpdateNotificationProp
               setJustUpdated(false);
               onDismiss?.();
             }}
-            className="text-white/80 hover:text-white"
+            className="text-white/80 hover:text-white z-999"
           >
             ✕
           </button>
