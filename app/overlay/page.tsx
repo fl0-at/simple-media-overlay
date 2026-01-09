@@ -1,7 +1,8 @@
 'use client';
 
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useEffect, useState, useRef, MouseEvent, useMemo } from 'react';
 import { useMediaInfo } from '@/app/hooks/useMediaInfo';
 import { AlbumArt } from './AlbumArt';
@@ -12,7 +13,7 @@ import { PinButton } from './PinButton';
 import UpdateNotification from './UpdateNotification';
 import { StyledImage } from './StyledImage';
 import { getPlayerInfo } from './appInfo';
-import { ListMusic } from 'lucide-react';
+import { ListMusic, Loader2 } from 'lucide-react';
 
 type RepeatMode = 'none' | 'track' | 'list';
 
@@ -93,6 +94,8 @@ export default function OverlayPage() {
   const [playElapsedMs, setPlayElapsedMs] = useState(0);
   const [pinned, setPinned] = useState(false);
   const [lyricsOverlayOpen, setLyricsOverlayOpen] = useState(false);
+  const [lyricsAvailable, setLyricsAvailable] = useState(false);
+  const [lyricsLoading, setLyricsLoading] = useState(false);
 
   // Track change animation state
   const [trackChangeDirection, setTrackChangeDirection] = useState<'next' | 'previous' | null>(null);
@@ -119,6 +122,14 @@ export default function OverlayPage() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let lyricsCloseUnlisten: (() => void) | undefined;
+
+    // Listen for lyrics window close
+    listen('lyrics-window-closed', () => {
+      setLyricsOverlayOpen(false);
+    }).then((u) => {
+      lyricsCloseUnlisten = u;
+    });
 
     // Fetch initial snapshot on mount/refresh
     invoke('refresh_media_snapshot').catch((e) =>
@@ -146,6 +157,15 @@ export default function OverlayPage() {
         previousSnapshotRef.current = currentSnapshotRef.current;
         currentSnapshotRef.current = event.payload;
         setSnapshot(event.payload);
+        
+        // Emit event for lyrics window
+        emit('media-updated', {
+          title: event.payload.props.title,
+          artist: event.payload.props.artist,
+          albumTitle: event.payload.props.album_title,
+          durationMs: event.payload.duration_ms,
+          positionMs: event.payload.position_ms,
+        });
       }
     }).then((u) => {
       unlisten = u;
@@ -153,6 +173,7 @@ export default function OverlayPage() {
 
     return () => {
       if (unlisten) unlisten();
+      if (lyricsCloseUnlisten) lyricsCloseUnlisten();
     };
   }, []);
 
@@ -161,10 +182,17 @@ export default function OverlayPage() {
       return;
     }
 
+    // Reset elapsed time whenever this effect runs (on position/playing state change)
+    // This ensures we always start fresh from the latest snapshot position
+    if (!isAnimating) {
+      setPlayElapsedMs(0);
+    }
+
     let frameId: number;
     let last = performance.now();
     const durationMs = snapshot.duration_ms;
     const positionMs = snapshot.position_ms ?? 0;
+    let lastEmitTime = 0;
 
     const tick = (now: number) => {
       const deltaMs = now - last;
@@ -173,7 +201,15 @@ export default function OverlayPage() {
       setPlayElapsedMs((prev) => {
         const next = prev + deltaMs;
         const maxElapsed = durationMs - positionMs;
-        return Math.min(next, maxElapsed);
+        const newPosition = Math.min(next, maxElapsed);
+        
+        // Emit position update to lyrics window every 100ms
+        if (now - lastEmitTime >= 100) {
+          emit('playback-position', { positionMs: positionMs + newPosition });
+          lastEmitTime = now;
+        }
+        
+        return newPosition;
       });
 
       frameId = requestAnimationFrame(tick);
@@ -184,18 +220,7 @@ export default function OverlayPage() {
     return () => {
       cancelAnimationFrame(frameId);
     };
-  }, [snapshot?.is_playing, snapshot?.duration_ms, snapshot?.position_ms]);
-
-  // Align client-side elapsed with backend snapshots to avoid jumps on pause/resume
-  useEffect(() => {
-    // Whenever the backend position updates, reset the local elapsed
-    // so effectivePositionMs = basePositionMs + elapsedSinceLastSnapshot
-    // BUT don't reset during track change animation to avoid timeline jumping
-    // Note: We only reset when position_ms changes, not when is_playing changes
-    if (!isAnimating) {
-      setPlayElapsedMs(0);
-    }
-  }, [snapshot?.position_ms, snapshot?.source_app_id, isAnimating]);
+  }, [snapshot?.is_playing, snapshot?.duration_ms, snapshot?.position_ms, isAnimating]);
 
   const hasSnapshotTitle = !!snapshot?.props?.title;
   const hasMediaTitle = !!media?.title;
@@ -840,6 +865,35 @@ export default function OverlayPage() {
     setImageKeyTimestamp(Date.now());
   }, [snapshot?.props?.title, media?.title, snapshot?.source_app_id]);
 
+  // Check lyrics availability when track changes
+  useEffect(() => {
+    const checkLyrics = async () => {
+      if (!snapshot?.props?.title || !snapshot?.props?.artist) {
+        setLyricsAvailable(false);
+        setLyricsLoading(false);
+        return;
+      }
+
+      setLyricsLoading(true);
+      try {
+        const result = await invoke<{ plainLyrics: string | null; syncedLyrics: string | null; instrumental: boolean }>('fetch_lyrics', {
+          trackName: snapshot.props.title,
+          artistName: snapshot.props.artist,
+          albumName: snapshot.props.album_title,
+          durationMs: snapshot.duration_ms,
+        });
+        // Only set available if synced lyrics exist
+        setLyricsAvailable(!!result.syncedLyrics);
+      } catch {
+        setLyricsAvailable(false);
+      } finally {
+        setLyricsLoading(false);
+      }
+    };
+
+    checkLyrics();
+  }, [snapshot?.props?.title, snapshot?.props?.artist, snapshot?.props?.album_title, snapshot?.duration_ms]);
+
   const snapshotImage = effectiveSnapshot?.props?.album_image
     ? `data:image/png;base64,${effectiveSnapshot.props.album_image}`
     : null;
@@ -908,7 +962,7 @@ export default function OverlayPage() {
     setPinned((v) => !v);
   };
 
-  const handleLyricOverlayToggle = (e: MouseEvent<HTMLButtonElement>): void => {
+  const handleLyricOverlayToggle = async (e: MouseEvent<HTMLButtonElement>): Promise<void> => {
     const rect = e.currentTarget.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
@@ -924,8 +978,54 @@ export default function OverlayPage() {
 
     setRipples([newRipple]);
     setTimeout(() => setRipples([]), 600);
-    setLyricsOverlayOpen((v) => !v);
-  }
+
+    try {
+      if (!lyricsOverlayOpen) {
+        // Create or show lyrics window
+        const existingWindow = await WebviewWindow.getByLabel('lyrics');
+        
+        if (existingWindow) {
+          await existingWindow.show();
+          await existingWindow.setFocus();
+        } else {
+          const lyricsWindow = new WebviewWindow('lyrics', {
+            url: '/lyrics',
+            title: '',
+            width: 408,
+            height: 160,
+            alwaysOnTop: true,
+            resizable: true,
+            decorations: false,
+            visible: true,
+            center: true,
+            transparent: true,
+            titleBarStyle: 'overlay',
+            hiddenTitle: true,
+          });
+          
+          // Show and focus after a brief delay to ensure window is ready
+          setTimeout(async () => {
+            try {
+              await lyricsWindow.show();
+              await lyricsWindow.setFocus();
+            } catch (err) {
+              console.error('Error showing lyrics window:', err);
+            }
+          }, 100);
+        }
+        setLyricsOverlayOpen(true);
+      } else {
+        // Hide lyrics window
+        const lyricsWindow = await WebviewWindow.getByLabel('lyrics');
+        if (lyricsWindow) {
+          await lyricsWindow.hide();
+        }
+        setLyricsOverlayOpen(false);
+      }
+    } catch (error) {
+      console.error('Failed to toggle lyrics window:', error);
+    }
+  };
 
   const TitleComponent = (
     <div
@@ -1017,12 +1117,23 @@ export default function OverlayPage() {
 
           {/* Lyrics overlay button */}
           <button
-            className={`w-9 h-9 fixed bottom-2.25 left-20 px-3 py-1 rounded-full text-xs font-semibold min-w-10 ${lyricsOverlayOpen ? 'bg-white hover:bg-white/80 text-black' : 'bg-white/10 hover:bg-white/20 text-white'
-              }`}
+            className={`w-9 h-9 fixed bottom-2.25 left-20 px-3 py-1 rounded-full text-xs font-semibold min-w-10 transition-colors ${
+              lyricsOverlayOpen
+                ? 'bg-white hover:bg-white/80 text-black'
+                : lyricsLoading
+                ? 'bg-black/60 text-white/60'
+                : lyricsAvailable
+                ? 'bg-black/60 hover:bg-black/70 text-white'
+                : 'bg-black/60 hover:bg-black/70 text-red-400'
+            }`}
             onClick={handleLyricOverlayToggle}
-            hidden={true} // hidden until implemented
+            title={lyricsLoading ? 'Loading...' : lyricsAvailable ? 'Lyrics' : 'No lyrics available'}
           >
-            <ListMusic size={16} />
+            {lyricsLoading ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <ListMusic size={16} />
+            )}
           </button>
 
           <div
