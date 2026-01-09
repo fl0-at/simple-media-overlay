@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "simple-media-overlay",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "identifier": "app.simple-media-overlay.dev",
   "build": {
     "frontendDist": "../out",
