@@ -204,7 +204,8 @@ async fn configure_window_menu(_window: tauri::Window) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn fetch_lyrics(track_name: String, artist_name: String, album_name: Option<String>, duration_ms: Option<i64>, state: State<'_, Arc<MediaState>>) -> Result<LyricsResponse, String> {
+async fn fetch_lyrics(app: tauri::AppHandle, track_name: String, artist_name: String, album_name: Option<String>, duration_ms: Option<i64>, state: State<'_, Arc<MediaState>>) -> Result<LyricsResponse, String> {
+    
     // Create cache key from artist and track name
     let cache_key = format!("{}|{}", artist_name.to_lowercase(), track_name.to_lowercase());
     
@@ -236,11 +237,22 @@ async fn fetch_lyrics(track_name: String, artist_name: String, album_name: Optio
         url.push_str(&format!("&duration={}", duration_sec));
     }
     
-    // Make the HTTP request
+    // Determine app version for User-Agent
+    let version = app.package_info().version.to_string();   
+
+    // Debug log the request
+    #[cfg(debug_assertions)]
+    {
+        log::debug!("fetch_lyrics: GET {} with User-Agent: simple-media-overlay v{} (https://github.com/fl0-at/simple-media-overlay)", url, version);
+    }
+
+    // Create HTTP client
     let client = reqwest::Client::new();
+    
+    // Make the HTTP request
     let response = client
         .get(&url)
-        .header("User-Agent", "simple-media-overlay/0.10.5")
+        .header("User-Agent", format!("simple-media-overlay v{} (https://github.com/fl0-at/simple-media-overlay)", version))
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
@@ -283,7 +295,7 @@ async fn fetch_lyrics(track_name: String, artist_name: String, album_name: Optio
         Err("Rate limit exceeded. Please try again later.".to_string())
     } else if status.is_client_error() {
         // 4xx errors (except 404 and 429)
-        Err(format!("Invalid request ({}). Please try a different song.", status.as_u16()))
+        Err(format!("Invalid request (HTTP {} \"{}\"). Please try a different song.", status.as_u16(), response.text().await.unwrap_or_default()))
     } else if status.is_server_error() {
         // 5xx errors - server issues
         Err(format!("Lyrics service temporarily unavailable ({}). Please try again later.", status.as_u16()))

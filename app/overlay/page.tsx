@@ -982,7 +982,6 @@ export default function OverlayPage() {
       size,
     };
     setRipples((prev) => [...prev, ripple]);
-    setTimeout(() => setRipples((prev) => prev.filter(r => r.id !== ripple.id)), 600);
   };
 
   // Helper to wrap button handlers to also trigger ripple
@@ -1095,6 +1094,7 @@ export default function OverlayPage() {
   return (
     <div
       ref={overlayRef}
+      key="main-overlay-container"
       className="w-screen h-screen flex items-center flex-start gap-1 flex-row px-2 py-1.5 relative overflow-hidden"
       style={{ background: 'rgba(0,0,0,0.75)', WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
     >
@@ -1110,6 +1110,7 @@ export default function OverlayPage() {
             top: ripple.y - ripple.size,
             zIndex: 0,
           }}
+          onAnimationEnd={() => setRipples((prev) => prev.filter(r => r.id !== ripple.id))}
         />
       ))}
 

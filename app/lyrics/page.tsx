@@ -63,6 +63,7 @@ const styles = `
 `;
 
 export default function LyricsPage() {
+    
   const [lyrics, setLyrics] = useState<LyricsData | null>(null);
   const [parsedLyrics, setParsedLyrics] = useState<LyricsLine[]>([]);
   const [currentPosition, setCurrentPosition] = useState(0);
@@ -70,8 +71,10 @@ export default function LyricsPage() {
   const [error, setError] = useState<string | null>(null);
   const [canRetry, setCanRetry] = useState(false);
   const [pinned, setPinned] = useState(false);
+  
   // Centralized ripple state for all overlay ripples
   const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number; size: number }>>([]);
+  
   const overlayRef = useRef<HTMLDivElement>(null);
   const [lastFetchParams, setLastFetchParams] = useState<{ title: string; artist: string; album?: string | null; duration?: number | null } | null>(null);
 
@@ -101,6 +104,16 @@ export default function LyricsPage() {
   };
 
   const fetchLyrics = async (title: string, artist: string, albumTitle?: string | null, durationMs?: number | null) => {
+    // Early return if title or artist is missing
+    if (!title || !artist) {
+      setLoading(false);
+      setError('No lyrics available');
+      setCanRetry(false);
+      setLyrics(null);
+      setParsedLyrics([]);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setCanRetry(false);
@@ -176,7 +189,6 @@ export default function LyricsPage() {
       size,
     };
     setRipples((prev) => [...prev, ripple]);
-    setTimeout(() => setRipples((prev) => prev.filter(r => r.id !== ripple.id)), 600);
   };
 
   const handlePinToggle = async (e: MouseEvent<HTMLButtonElement>) => {
@@ -345,6 +357,7 @@ export default function LyricsPage() {
       <style>{styles}</style>
       <div
         ref={overlayRef}
+        key="lyrics-overlay-container"
         className="w-screen h-screen flex flex-col relative overflow-hidden"
         style={{ background: 'rgba(0,0,0,0.85)', userSelect: 'none' } as never}
       >
@@ -360,6 +373,7 @@ export default function LyricsPage() {
               top: ripple.y - ripple.size,
               zIndex: 0,
             }}
+            onAnimationEnd={() => setRipples((prev) => prev.filter(r => r.id !== ripple.id))}
           />
         ))}
         {/* Header with controls */}
