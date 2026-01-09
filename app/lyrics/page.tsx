@@ -3,7 +3,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useEffect, useState, MouseEvent } from 'react';
+import { useEffect, useState, MouseEvent, useRef } from 'react';
 import { WindowControls } from '../WindowControls';
 
 interface LyricsData {
@@ -70,7 +70,9 @@ export default function LyricsPage() {
   const [error, setError] = useState<string | null>(null);
   const [canRetry, setCanRetry] = useState(false);
   const [pinned, setPinned] = useState(false);
+  // Centralized ripple state for all overlay ripples
   const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number; size: number }>>([]);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const [lastFetchParams, setLastFetchParams] = useState<{ title: string; artist: string; album?: string | null; duration?: number | null } | null>(null);
 
   // Parse LRC format synced lyrics
@@ -159,22 +161,26 @@ export default function LyricsPage() {
     }
   };
 
-  const handlePinToggle = async (e: MouseEvent<HTMLButtonElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    const size = Math.max(rect.width, rect.height);
-
-    const newRipple = {
-      id: Date.now(),
-      x: centerX,
-      y: centerY,
-      size: size,
+  const triggerRipple = (e: MouseEvent<HTMLButtonElement>) => {
+    if (!overlayRef.current) return;
+    const buttonRect = e.currentTarget.getBoundingClientRect();
+    const overlayRect = overlayRef.current.getBoundingClientRect();
+    const size = Math.max(buttonRect.width, buttonRect.height);
+    // Calculate center of button relative to overlay
+    const x = (buttonRect.left + buttonRect.width / 2) - overlayRect.left;
+    const y = (buttonRect.top + buttonRect.height / 2) - overlayRect.top;
+    const ripple = {
+      id: Date.now() + Math.random(),
+      x,
+      y,
+      size,
     };
+    setRipples((prev) => [...prev, ripple]);
+    setTimeout(() => setRipples((prev) => prev.filter(r => r.id !== ripple.id)), 600);
+  };
 
-    setRipples([newRipple]);
-    setTimeout(() => setRipples([]), 600);
-
+  const handlePinToggle = async (e: MouseEvent<HTMLButtonElement>) => {
+    triggerRipple(e);
     setPinned(!pinned);
   };
 
@@ -338,9 +344,24 @@ export default function LyricsPage() {
     <>
       <style>{styles}</style>
       <div
-        className="w-screen h-screen flex flex-col"
+        ref={overlayRef}
+        className="w-screen h-screen flex flex-col relative overflow-hidden"
         style={{ background: 'rgba(0,0,0,0.85)', userSelect: 'none' } as never}
       >
+        {/* Background ripples */}
+        {ripples.map((ripple) => (
+          <span
+            key={ripple.id}
+            className="absolute rounded-full bg-white/30 animate-ripple pointer-events-none"
+            style={{
+              width: ripple.size * 2,
+              height: ripple.size * 2,
+              left: ripple.x - ripple.size,
+              top: ripple.y - ripple.size,
+              zIndex: 0,
+            }}
+          />
+        ))}
         {/* Header with controls */}
         <div
           className="flex items-center justify-between px-3 py-2.5 border-b border-white/10"
@@ -360,7 +381,7 @@ export default function LyricsPage() {
             </a>
           </div>
           <div className="flex gap-2" style={{ WebkitAppRegion: 'no-drag' } as never}>
-            <WindowControls pinned={pinned} onPinToggle={handlePinToggle} onClose={handleClose} ripples={ripples} />
+            <WindowControls pinned={pinned} onPinToggle={handlePinToggle} onClose={handleClose} />
           </div>
         </div>
 

@@ -117,10 +117,11 @@ export default function OverlayPage() {
   const [playPauseImpact, setPlayPauseImpact] = useState(false);
   const previousPlayStateRef = useRef<boolean | undefined>(undefined);
 
-  // Pin button ripple
+  // Centralized ripple state for all overlay ripples
   const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number; size: number }>>([]);
-  // Lyrics toggle button ripple
-  const [lyricsRipples, setLyricsRipples] = useState<Array<{ id: number; x: number; y: number; size: number }>>([]);
+
+  // Ref for overlay container
+  const overlayRef = useRef<HTMLDivElement>(null);
 
   // Disable context menu when pinned (allow native Windows menu when unpinned)
   useEffect(() => {
@@ -966,43 +967,45 @@ export default function OverlayPage() {
     sendSeek(targetMs);
   };
 
-  const handlePlayPause = () => {
+  const triggerRipple = (e: MouseEvent<HTMLButtonElement>) => {
+    if (!overlayRef.current) return;
+    const buttonRect = e.currentTarget.getBoundingClientRect();
+    const overlayRect = overlayRef.current.getBoundingClientRect();
+    const size = Math.max(buttonRect.width, buttonRect.height);
+    // Calculate center of button relative to overlay
+    const x = (buttonRect.left + buttonRect.width / 2) - overlayRect.left;
+    const y = (buttonRect.top + buttonRect.height / 2) - overlayRect.top;
+    const ripple = {
+      id: Date.now() + Math.random(),
+      x,
+      y,
+      size,
+    };
+    setRipples((prev) => [...prev, ripple]);
+    setTimeout(() => setRipples((prev) => prev.filter(r => r.id !== ripple.id)), 600);
+  };
+
+  // Helper to wrap button handlers to also trigger ripple
+  // Type-safe ripple wrapper for button event handlers
+  const withRipple = (handler: (e: MouseEvent<HTMLButtonElement>) => void) => (e: MouseEvent<HTMLButtonElement>) => {
+    triggerRipple(e);
+    handler(e);
+  };
+
+  const handlePlayPause = (e: MouseEvent<HTMLButtonElement>) => {
     setPlayPauseImpact(true);
     setTimeout(() => setPlayPauseImpact(false), 300);
     sendControl('playPause', setTrackChangeDirection);
+    triggerRipple(e);
   };
 
   const handlePinToggle = (e: MouseEvent<HTMLButtonElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const size = Math.max(rect.width, rect.height);
-
-    // Create ripple effect with relative coordinates (button center)
-    const newRipple = {
-      id: Date.now(),
-      x: rect.width / 2,
-      y: rect.height / 2,
-      size: size,
-    };
-
-    setRipples([newRipple]);
-    setTimeout(() => setRipples([]), 600);
     setPinned((v) => !v);
+    triggerRipple(e);
   };
 
   const handleLyricOverlayToggle = async (e: MouseEvent<HTMLButtonElement>): Promise<void> => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const size = Math.max(rect.width, rect.height);
-
-    // Create ripple effect with relative coordinates (button center)
-    const newRipple = {
-      id: Date.now(),
-      x: rect.width / 2,
-      y: rect.height / 2,
-      size: size,
-    };
-
-    setLyricsRipples([newRipple]);
-    setTimeout(() => setLyricsRipples([]), 600);
+    triggerRipple(e);
 
     try {
       if (!lyricsOverlayOpen) {
@@ -1091,29 +1094,44 @@ export default function OverlayPage() {
 
   return (
     <div
-      className="w-screen h-screen flex items-center flex-start gap-1 flex-row px-2 py-1.5"
+      ref={overlayRef}
+      className="w-screen h-screen flex items-center flex-start gap-1 flex-row px-2 py-1.5 relative overflow-hidden"
       style={{ background: 'rgba(0,0,0,0.75)', WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
     >
+      {/* Background ripples */}
+      {ripples.map((ripple) => (
+        <span
+          key={ripple.id}
+          className="absolute rounded-full bg-white/30 animate-ripple pointer-events-none"
+          style={{
+            width: ripple.size * 2,
+            height: ripple.size * 2,
+            left: ripple.x - ripple.size,
+            top: ripple.y - ripple.size,
+            zIndex: 0,
+          }}
+        />
+      ))}
 
       {hasActiveMedia ? (
         <>
           <div
             key={`album-${animationKey}`}
             className={`flex items-center gap-1 ${isFading && appSwitchDirection
-                ? appSwitchDirection === 'up'
-                  ? 'app-slide-out-up opacity-30'
-                  : 'app-slide-out-down opacity-30'
-                : isFading
-                  ? 'track-fading'
-                  : appSwitchAnimating
-                    ? appSwitchDirection === 'up'
-                      ? 'app-slide-in-up'
-                      : 'app-slide-in-down'
-                    : isAnimating && trackChangeDirection
-                      ? trackChangeDirection === 'previous'
-                        ? 'track-slide-in-prev'
-                        : 'track-slide-in-next'
-                      : ''
+              ? appSwitchDirection === 'up'
+                ? 'app-slide-out-up opacity-30'
+                : 'app-slide-out-down opacity-30'
+              : isFading
+                ? 'track-fading'
+                : appSwitchAnimating
+                  ? appSwitchDirection === 'up'
+                    ? 'app-slide-in-up'
+                    : 'app-slide-in-down'
+                  : isAnimating && trackChangeDirection
+                    ? trackChangeDirection === 'previous'
+                      ? 'track-slide-in-prev'
+                      : 'track-slide-in-next'
+                    : ''
               } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
           >
             <AlbumArt imageSrc={imageSrc} albumTitle={effectiveAlbumTitle} pinned={pinned} imageKey={imageKey} />
@@ -1124,14 +1142,14 @@ export default function OverlayPage() {
             src={getPlayerInfo(frozenSnapshot?.source_app_id ?? sourceAppId).imageSrc}
             alt={getPlayerInfo(frozenSnapshot?.source_app_id ?? sourceAppId).name}
             className={`w-9 h-9 fixed bottom-1.5 left-1 ${isFading && appSwitchDirection
+              ? appSwitchDirection === 'up'
+                ? 'app-slide-out-down opacity-30'
+                : 'app-slide-out-up opacity-30'
+              : appSwitchAnimating
                 ? appSwitchDirection === 'up'
-                  ? 'app-slide-out-down opacity-30'
-                  : 'app-slide-out-up opacity-30'
-                : appSwitchAnimating
-                  ? appSwitchDirection === 'up'
-                    ? 'app-slide-in-down'
-                    : 'app-slide-in-up'
-                  : ''
+                  ? 'app-slide-in-down'
+                  : 'app-slide-in-up'
+                : ''
               } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
             width={36}
             height={36}
@@ -1142,12 +1160,12 @@ export default function OverlayPage() {
           {/* Lyrics overlay button */}
           <button
             className={`w-9 h-9 fixed bottom-2.25 left-20 rounded-full flex items-center justify-center transition-colors overflow-hidden ${lyricsOverlayOpen
-                ? 'bg-white hover:bg-white/80 text-black'
-                : lyricsLoading
-                  ? 'bg-black/60 text-white/60'
-                  : lyricsAvailable
-                    ? 'bg-black/60 hover:bg-black/70 text-white'
-                    : 'bg-black/60 hover:bg-black/70 text-red-400'
+              ? 'bg-white hover:bg-white/80 text-black'
+              : lyricsLoading
+                ? 'bg-black/60 text-white/60'
+                : lyricsAvailable
+                  ? 'bg-black/60 hover:bg-black/70 text-white'
+                  : 'bg-black/60 hover:bg-black/70 text-red-400'
               }`}
             onClick={handleLyricOverlayToggle}
             title={lyricsLoading ? 'Loading...' : lyricsAvailable ? 'Lyrics' : 'No lyrics available'}
@@ -1158,38 +1176,24 @@ export default function OverlayPage() {
             ) : (
               <ListMusic size={16} />
             )}
-            {/* Ripple effects */}
-            {lyricsRipples.map((ripple) => (
-              <span
-                key={ripple.id}
-                className="absolute rounded-full bg-white/30 animate-ripple pointer-events-none"
-                style={{
-                  width: ripple.size * 2,
-                  height: ripple.size * 2,
-                  left: ripple.x - ripple.size,
-                  top: ripple.y - ripple.size,
-                  zIndex: 10,
-                }}
-              />
-            ))}
           </button>
 
           <div
             className={`flex flex-col content-center justify-center shrink-0 transition-opacity duration-150 ${isFading && appSwitchDirection
-                ? appSwitchDirection === 'up'
-                  ? 'app-slide-out-up opacity-30'
-                  : 'app-slide-out-down opacity-30'
-                : isFading
-                  ? 'opacity-30'
-                  : appSwitchAnimating
-                    ? appSwitchDirection === 'up'
-                      ? 'app-slide-in-up'
-                      : 'app-slide-in-down'
-                    : isAnimating && trackChangeDirection
-                      ? trackChangeDirection === 'previous'
-                        ? 'track-slide-in-prev'
-                        : 'track-slide-in-next'
-                      : ''
+              ? appSwitchDirection === 'up'
+                ? 'app-slide-out-up opacity-30'
+                : 'app-slide-out-down opacity-30'
+              : isFading
+                ? 'opacity-30'
+                : appSwitchAnimating
+                  ? appSwitchDirection === 'up'
+                    ? 'app-slide-in-up'
+                    : 'app-slide-in-down'
+                  : isAnimating && trackChangeDirection
+                    ? trackChangeDirection === 'previous'
+                      ? 'track-slide-in-prev'
+                      : 'track-slide-in-next'
+                    : ''
               } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
             style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag', width: '280px', height: '128px', overflow: 'hidden' } as never}
           >
@@ -1202,7 +1206,7 @@ export default function OverlayPage() {
               />
               {/* Pin and Close buttons - top right corner */}
               <div className="flex flex-col content-start top-2 right-2.5 z-99" style={{ WebkitAppRegion: 'no-drag' } as never}>
-                <WindowControls pinned={pinned} onPinToggle={handlePinToggle} ripples={ripples} />
+                <WindowControls pinned={pinned} onPinToggle={handlePinToggle} />
               </div>
             </div>
 
@@ -1219,11 +1223,18 @@ export default function OverlayPage() {
               sourceAppId={sourceAppId}
               pinned={pinned}
               playPauseImpact={playPauseImpact}
-              onPlayPause={handlePlayPause}
-              onPrevious={() => sendControl('previous', setTrackChangeDirection, setIsFading)}
-              onNext={() => sendControl('next', setTrackChangeDirection, setIsFading)}
-              onShuffle={(value) => sendPlaybackMode('shuffle', value)}
-              onRepeat={(mode) => sendPlaybackMode('repeat', mode)}
+              onPlayPause={withRipple(handlePlayPause)}
+              onPrevious={withRipple(() => sendControl('previous', setTrackChangeDirection, setIsFading))}
+              onNext={withRipple(() => sendControl('next', setTrackChangeDirection, setIsFading))}
+              onShuffle={withRipple(() => sendPlaybackMode('shuffle', !isShuffle))}
+              onRepeat={withRipple(() => {
+                const current = snapshot?.repeat_mode ?? 'none';
+                let next: 'none' | 'list' | 'track';
+                if (current === 'none') next = 'list';
+                else if (current === 'list') next = 'track';
+                else next = 'none';
+                sendPlaybackMode('repeat', next);
+              })}
             />
 
           </div>

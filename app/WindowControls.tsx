@@ -8,10 +8,9 @@ interface WindowControlsProps {
   pinned: boolean;
   onPinToggle: (e: MouseEvent<HTMLButtonElement>) => void;
   onClose?: () => void | Promise<void>;
-  ripples?: Array<{ id: number; x: number; y: number; size: number }>;
 }
 
-export function WindowControls({ pinned, onPinToggle, onClose, ripples = [] }: WindowControlsProps) {
+export function WindowControls({ pinned, onPinToggle, onClose }: WindowControlsProps) {
   const handleClose = async () => {
     if (onClose) {
       await onClose();
@@ -34,20 +33,6 @@ export function WindowControls({ pinned, onPinToggle, onClose, ripples = [] }: W
         title={pinned ? 'Unpin' : 'Pin'}
       >
         {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-        {/* Ripple effects */}
-        {ripples.map((ripple) => (
-          <span
-            key={ripple.id}
-            className="absolute rounded-full bg-white/30 animate-ripple pointer-events-none"
-            style={{
-              width: ripple.size * 2,
-              height: ripple.size * 2,
-              left: ripple.x - ripple.size,
-              top: ripple.y - ripple.size,
-              zIndex: 10,
-            }}
-          />
-        ))}
       </button>
       
       {/* Close button */}

@@ -12,11 +12,11 @@ interface MediaControlsProps {
   sourceAppId: string | null;
   pinned: boolean;
   playPauseImpact?: boolean;
-  onPlayPause: () => void;
-  onPrevious: () => void;
-  onNext: () => void;
-  onShuffle: (value: boolean) => void;
-  onRepeat: (mode: RepeatMode) => void;
+  onPlayPause: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onPrevious: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onNext: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onShuffle: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onRepeat: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }
 
 export function MediaControls({
@@ -33,17 +33,6 @@ export function MediaControls({
   onRepeat,
 }: MediaControlsProps) {
   const showPlaybackModes = isPlaybackModeSupported(sourceAppId);
-
-  const handleRepeatClick = () => {
-    // Cycle: none -> list -> track -> none
-    if (repeatMode === 'none') {
-      onRepeat('list');
-    } else if (repeatMode === 'list') {
-      onRepeat('track');
-    } else {
-      onRepeat('none');
-    }
-  };
 
   const getRepeatIcon = () => {
     if (repeatMode === 'track') {
@@ -71,7 +60,7 @@ export function MediaControls({
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
           }
-          onClick={handleRepeatClick}
+          onClick={onRepeat}
           id="repeat-button"
           style={{ WebkitAppRegion: 'no-drag' } as never}
           title="Repeat Mode"
@@ -114,7 +103,7 @@ export function MediaControls({
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
           }
-          onClick={() => onShuffle(!isShuffle)}
+          onClick={onShuffle}
           id="shuffle-button"
           style={{ WebkitAppRegion: 'no-drag' } as never}
           title="Shuffle"
