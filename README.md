@@ -124,6 +124,10 @@ I might switch to a cross-platform crate in the future to support macOS and Linu
 
 ## Troubleshooting
 
+**Ugly-looking "title-bar" in the overlay and lyrics window?**
+
+- This is actually a [known issue](https://github.com/fl0-at/simple-media-overlay/issues/7) that is connected to a [regression that was recently introduced by Microsoft on the WebView2 runtime](https://github.com/MicrosoftEdge/WebView2Feedback/issues/5492)
+
 **Timeline shows incorrect progress?**
 
 - This is currently a [known issue](https://github.com/fl0-at/simple-media-overlay/issues/4) that I am working on, so feel free to contribute if you spot the root cause of this problem
