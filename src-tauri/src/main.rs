@@ -109,9 +109,20 @@ where
         .get()
         .map_err(|e| format!("RequestAsync get failed: {e:?}"))?;
 
-    let session = mgr
-        .GetCurrentSession()
-        .map_err(|e| format!("GetCurrentSession failed: {e:?}"))?;
+    let session = match mgr.GetCurrentSession() {
+        Ok(s) => s,
+        Err(e) => {
+            // Some Windows APIs (via the `windows` crate) can return an Err
+            // whose HRESULT is 0 (S_OK) — treat that as non-fatal/no-session
+            // (this matches the polling loop behavior which ignores S_OK "noise").
+            if e.code().0 == 0 {
+                log::debug!("GetCurrentSession returned spurious S_OK Err: {:?}", e);
+                return Ok(());
+            } else {
+                return Err(format!("GetCurrentSession failed: {e:?}"));
+            }
+        }
+    };
 
     f(session)
 }
@@ -185,7 +196,7 @@ async fn configure_window_menu(window: tauri::Window) -> Result<(), String> {
                 }
                 
                 // Subclass the window to intercept WM_CONTEXTMENU
-                let old_proc = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, custom_wndproc as isize);
+                let old_proc = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, custom_wndproc as *const () as isize);
                 let mut old_procs = OLD_WNDPROCS.lock().unwrap();
                 old_procs.insert(hwnd.0 as isize, old_proc);
                 drop(old_procs);
@@ -563,7 +574,9 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
         let session = match mgr.GetCurrentSession() {
             Ok(s) => s,
             Err(e) => {
-                // Only log truly failing HRESULTs; ignore S_OK noise.
+                // Some Windows APIs (via the `windows` crate) can return an Err
+                // whose HRESULT is 0 (S_OK). Treat that as non-fatal/no-session
+                // to avoid surfacing spurious errors to the frontend.
                 if e.code().0 != 0 {
                     log::debug!("GetCurrentSession error in poll loop: {:?}", e);
                 }
@@ -785,9 +798,20 @@ fn control_current_session_sync(action: MediaAction) -> Result<(), String> {
         .map_err(|e| format!("RequestAsync get failed: {e:?}"))?;
 
     // Get current session
-    let session: GlobalSystemMediaTransportControlsSession = mgr
-        .GetCurrentSession()
-        .map_err(|e| format!("GetCurrentSession failed: {e:?}"))?;
+    let session = match mgr.GetCurrentSession() {
+        Ok(s) => s,
+        Err(e) => {
+            // Some Windows APIs (via the `windows` crate) can return an Err
+            // whose HRESULT is 0 (S_OK). Treat that as non-fatal/no-session
+            // to avoid surfacing spurious errors to the frontend.
+            if e.code().0 == 0 {
+                log::debug!("GetCurrentSession returned spurious S_OK Err in control_current_session_sync: {:?}", e);
+                return Ok(());
+            } else {
+                return Err(format!("GetCurrentSession failed: {e:?}"));
+            }
+        }
+    };
     // If there is no session, GetCurrentSession returns an error, so no IsNull check here.
 
     match action {
@@ -833,9 +857,20 @@ async fn seek_to(position_ms: i64) -> Result<(), String> {
         .map_err(|e| format!("RequestAsync get failed: {e:?}"))?;
 
     // Get current session
-    let session = mgr
-        .GetCurrentSession()
-        .map_err(|e| format!("GetCurrentSession failed: {e:?}"))?;
+    let session = match mgr.GetCurrentSession() {
+        Ok(s) => s,
+        Err(e) => {
+            // Some Windows APIs (via the `windows` crate) can return an Err
+            // whose HRESULT is 0 (S_OK). Treat that as non-fatal/no-session
+            // to avoid surfacing spurious errors to the frontend.
+            if e.code().0 == 0 {
+                log::debug!("GetCurrentSession returned spurious S_OK Err in seek_to: {:?}", e);
+                return Ok(());
+            } else {
+                return Err(format!("GetCurrentSession failed: {e:?}"));
+            }
+        }
+    };
 
     // Convert ms to 100‑ns ticks
     let requested_ticks = position_ms * 10_000;
@@ -860,9 +895,20 @@ async fn refresh_media_snapshot(
         .get()
         .map_err(|e| format!("RequestAsync get failed: {e:?}"))?;
 
-    let session = mgr
-        .GetCurrentSession()
-        .map_err(|e| format!("GetCurrentSession failed: {e:?}"))?;
+    let session = match mgr.GetCurrentSession() {
+        Ok(s) => s,
+        Err(e) => {
+            // Some Windows APIs (via the `windows` crate) can return an Err
+            // whose HRESULT is 0 (S_OK). Treat that as non-fatal/no-session
+            // to avoid surfacing spurious errors to the frontend.
+            if e.code().0 == 0 {
+                log::debug!("GetCurrentSession returned spurious S_OK Err in refresh_media_snapshot: {:?}", e);
+                return Ok(());
+            } else {
+                return Err(format!("GetCurrentSession failed: {e:?}"));
+            }
+        }
+    };
 
     // Get previous snapshot data to preserve thumbnail cache and title
     let (prev_thumbnail, prev_title) = {
@@ -983,7 +1029,7 @@ fn main() {
                                 }
                                 
                                 // Subclass the window to intercept WM_CONTEXTMENU
-                                let old_proc = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, custom_wndproc as isize);
+                                let old_proc = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, custom_wndproc as *const () as isize);
                                 let mut old_procs = OLD_WNDPROCS.lock().unwrap();
                                 old_procs.insert(hwnd.0 as isize, old_proc);
                                 drop(old_procs);
