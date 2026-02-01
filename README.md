@@ -20,6 +20,7 @@ I decided to add a second overlay that displays synced lyrics, if available, sin
 - 🔁 Toggle repeat mode and/or shuffle, [if supported by the player](#current-limitations)
 - 🎼 Toggle the _Lyrics Overlay_ to see synced lyrics, if available on [LRC Library](https://lrclib.net)
 - ✨ Fancy animations when the currently played media or the playback source changes, is played/paused or the overlay is pinned
+- 🔃 Automatic app-updates to ensure you are running the latest version
 
 ## Prerequisites
 
@@ -36,9 +37,9 @@ If you want to build from source or contribute to development:
 
 ### For end users
 
-Simply download either the NSIS or MSI installer from the [latest release](https://github.com/fl0-at/simple-media-overlay/releases/latest).
+Simply download either the MSI installer from the [latest release](https://github.com/fl0-at/simple-media-overlay/releases/latest).
 
-The app includes automatic update notifications - you'll be notified when a new version is available!
+The app includes automatic updates - you'll be notified when a new version is available, and the app will automatically update and restart!
 
 ### For developers
 
@@ -126,7 +127,7 @@ I might switch to a cross-platform crate in the future to support macOS and Linu
 
 **Ugly-looking "title-bar" in the overlay and lyrics window?**
 
-- This is actually a [known issue](https://github.com/fl0-at/simple-media-overlay/issues/7) that is connected to a [regression that was recently introduced by Microsoft on the WebView2 runtime](https://github.com/MicrosoftEdge/WebView2Feedback/issues/5492)
+- This was actually a [known issue](https://github.com/fl0-at/simple-media-overlay/issues/7) that was connected to a [regression recently introduced by Microsoft on the WebView2 runtime](https://github.com/MicrosoftEdge/WebView2Feedback/issues/5492). If you are still experiencing this, make sure to update the WebView2 runtime on your system to at least version 144.0.3719.93 (this should happen automatically via Windows Updates).
 
 **Timeline shows incorrect progress?**
 
@@ -134,13 +135,10 @@ I might switch to a cross-platform crate in the future to support macOS and Linu
 
 **Media not showing up?**
 
-- Make sure your media player publishes to Windows GSMTC (most modern apps do)
-- Try playing/pausing the media once to trigger the overlay update
-- Check that the app is running
+- Make sure your media player publishes to Windows GSMTC (most modern apps do - see [list of supported players here](#current-limitations))
 
 **Overlay not staying on top?**
 
-- Restart the application
 - Some fullscreen apps may override the always-on-top behavior
 
 **Can't move the overlay?**
