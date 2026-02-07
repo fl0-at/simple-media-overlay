@@ -1315,7 +1315,7 @@ export default function OverlayPage() {
           </div>
         </>
       ) : (
-        <div className="flex flex-col">
+        <div className="flex flex-col w-full h-full">
           {/* Container for window controls */}
           <div className="flex flex-row justify-end w-full">
             {/* Pin and Close buttons - top right corner */}
