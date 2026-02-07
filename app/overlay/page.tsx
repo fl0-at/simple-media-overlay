@@ -1315,9 +1315,9 @@ export default function OverlayPage() {
           </div>
         </>
       ) : (
-        <>
+        <div className="flex flex-col">
           {/* Container for window controls */}
-          <div className="flex flex-row justify-between w-full">
+          <div className="flex flex-row justify-end w-full">
             {/* Pin and Close buttons - top right corner */}
             <div className="flex flex-col content-start top-2 right-2.5 z-99" style={{ WebkitAppRegion: 'no-drag' } as never}>
               <WindowControls pinned={pinned} onPinToggle={handlePinToggle} />
@@ -1334,7 +1334,7 @@ export default function OverlayPage() {
               🎵 Start playback in your favorite player to see controls here 🎶
             </div>
           </div>
-        </>
+        </div>
       )}
       <UpdateNotification />
     </div>
