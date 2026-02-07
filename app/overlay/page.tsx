@@ -1315,15 +1315,24 @@ export default function OverlayPage() {
           </div>
         </>
       ) : (
-        <div
-          className="flex flex-col items-center justify-center w-full py-4"
-          style={{ WebkitAppRegion: 'drag' } as never}
-        >
-          <div className="text-sm text-white/60">
-            🔇 No media is currently playing 🔇
+        <div className="flex flex-col w-full h-full">
+          {/* Container for window controls */}
+          <div className="flex flex-row justify-end w-full">
+            {/* Pin and Close buttons - top right corner */}
+            <div className="flex flex-col content-start top-2 right-2.5 z-99" style={{ WebkitAppRegion: 'no-drag' } as never}>
+              <WindowControls pinned={pinned} onPinToggle={handlePinToggle} />
+            </div>
           </div>
-          <div className="text-xs text-white/40 mt-1">
-            🎵 Start playback in your favorite player to see controls here 🎶
+          <div
+            className="flex flex-col items-center justify-center w-full py-2"
+            style={{ WebkitAppRegion: 'drag' } as never}
+          >
+            <div className="text-sm text-white/60">
+              🔇 No media is currently playing 🔇
+            </div>
+            <div className="text-xs text-white/40 mt-1">
+              🎵 Start playback in your favorite player to see controls here 🎶
+            </div>
           </div>
         </div>
       )}
