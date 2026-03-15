@@ -14,8 +14,8 @@ export function MediaTimeline({ hasTimeline, progress, onProgressClick }: MediaT
   return (
     <div
       className="mt-2 w-full h-1.5 bg-white/15 rounded-full cursor-pointer"
+      data-no-drag
       style={{
-        WebkitAppRegion: 'no-drag',
         userSelect: 'none',
         visibility: visible ? 'visible' : 'hidden',
         pointerEvents: visible ? 'auto' : 'none',

@@ -2,6 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
+import { LogicalSize, getCurrentWindow } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useEffect, useState, useRef, MouseEvent, useMemo } from 'react';
 import { useMediaInfo } from '@/app/hooks/useMediaInfo';
@@ -93,6 +94,7 @@ export default function OverlayPage() {
   const pendingSnapshotRef = useRef<MediaSnapshotDto | null>(null);
   const [playElapsedMs, setPlayElapsedMs] = useState(0);
   const [pinned, setPinned] = useState(false);
+  const dragRegionProps = pinned ? {} : { 'data-tauri-drag-region': '' };
   const [lyricsOverlayOpen, setLyricsOverlayOpen] = useState(false);
   const [lyricsAvailable, setLyricsAvailable] = useState(false);
   const [lyricsLoading, setLyricsLoading] = useState(false);
@@ -115,6 +117,7 @@ export default function OverlayPage() {
   const [frozenSnapshot, setFrozenSnapshot] = useState<MediaSnapshotDto | null>(null);
   const previousSnapshotRef = useRef<MediaSnapshotDto | null>(null);
   const [appSwitchTrigger, setAppSwitchTrigger] = useState(0);
+  const [lastVisibleSnapshot, setLastVisibleSnapshot] = useState<MediaSnapshotDto | null>(null);
 
   // Play/pause impact animation
   const [playPauseImpact, setPlayPauseImpact] = useState(false);
@@ -125,12 +128,24 @@ export default function OverlayPage() {
 
   // Ref for overlay container
   const overlayRef = useRef<HTMLDivElement>(null);
+  const currentWindowRef = useRef<any | null>(null);
 
-  // Disable context menu when pinned (allow native Windows menu when unpinned)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      currentWindowRef.current = getCurrentWindow();
+    } catch {
+      currentWindowRef.current = null;
+    }
+  }, []);
+
+  // Always prevent the webview/contextmenu; when pinned, also prevent native menu
   useEffect(() => {
     const handleContextMenu = (e: Event) => {
+      // Always prevent the in-webview/contextmenu from appearing
+      e.preventDefault();
+      // When pinned, also signal to prevent native menu via custom window procedure
       if (pinned) {
-        e.preventDefault();
         return false;
       }
     };
@@ -153,8 +168,8 @@ export default function OverlayPage() {
     });
 
     // Fetch initial snapshot on mount/refresh
-    invoke('refresh_media_snapshot').catch((e) =>
-      console.error('refresh_media_snapshot failed on mount', e)
+    invoke('refresh_media_snapshot').catch((e: any) =>
+      console.warn('refresh_media_snapshot failed on mount', e)
     );
 
     listen<MediaSnapshotDto>('media_snapshot', (event) => {
@@ -167,6 +182,13 @@ export default function OverlayPage() {
         // Store both old and new snapshots
         previousSnapshotRef.current = currentSnapshotRef.current;
         pendingSnapshotRef.current = event.payload;
+
+        console.log('[App Switch Detected]', {
+          previousAppId: currentSourceAppId,
+          newAppId: newSourceAppId,
+          previousTitle: currentSnapshotRef.current?.props.title,
+          newTitle: event.payload.props.title,
+        });
 
         // DON'T update currentSnapshotRef yet - we need it to stay as the old snapshot
         // for the freeze to work correctly. It will be updated in the effect.
@@ -207,6 +229,46 @@ export default function OverlayPage() {
     return () => {
       if (unlisten) unlisten();
       if (lyricsCloseUnlisten) lyricsCloseUnlisten();
+    };
+  }, []);
+
+  useEffect(() => {
+    const window = getCurrentWindow();
+    let unlistenFocusChanged: (() => void) | undefined;
+
+    window.setAlwaysOnTop(true).catch((e) => {
+      console.error('setAlwaysOnTop failed', e);
+    });
+
+    window.setSize(new LogicalSize(408, 128)).catch((e) => {
+      console.error('setSize failed', e);
+    });
+
+    window.setShadow(false).catch(() => {
+      // Unsupported on Linux; ignore.
+    });
+
+    const reassertTopmost = () => {
+      window.setAlwaysOnTop(true).catch(() => {
+        // Best effort on Linux window managers.
+      });
+    };
+
+    window.onFocusChanged(({ payload: focused }) => {
+      if (!focused) {
+        reassertTopmost();
+      }
+    }).then((unlisten: any) => {
+      unlistenFocusChanged = unlisten;
+    }).catch(() => {
+      // Ignore if unavailable.
+    });
+
+    document.addEventListener('visibilitychange', reassertTopmost);
+
+    return () => {
+      document.removeEventListener('visibilitychange', reassertTopmost);
+      unlistenFocusChanged?.();
     };
   }, []);
 
@@ -255,17 +317,13 @@ export default function OverlayPage() {
     };
   }, [snapshot?.is_playing, snapshot?.duration_ms, snapshot?.position_ms, isAnimating]);
 
-  const hasSnapshotTitle = !!snapshot?.props?.title;
-  const hasMediaTitle = !!media?.title;
-  const hasActiveMedia = hasSnapshotTitle || hasMediaTitle;
-
   const sourceAppId = snapshot?.source_app_id ?? null;
 
   useEffect(() => {
     const current = snapshot?.source_app_id ?? null;
     if (lastSourceAppIdRef.current !== current && lastSourceAppIdRef.current !== null) {
       // App switched - force a refresh to get updated snapshot from new app
-      invoke('refresh_media_snapshot').catch((e) =>
+      invoke('refresh_media_snapshot').catch((e: any) =>
         console.error('refresh_media_snapshot failed on app switch', e)
       );
       lastSourceAppIdRef.current = current;
@@ -275,9 +333,33 @@ export default function OverlayPage() {
     }
   }, [snapshot?.source_app_id]);
 
+  useEffect(() => {
+    const candidate = frozenSnapshot ?? snapshot;
+    if (candidate?.props?.title) {
+      setLastVisibleSnapshot(candidate);
+    }
+  }, [frozenSnapshot, snapshot]);
+
+  const displaySnapshot = useMemo(() => {
+    const candidate = frozenSnapshot ?? snapshot;
+    if (candidate?.props?.title) {
+      return candidate;
+    }
+
+    if (playbackLoading || isAnimating || isFading || appSwitchAnimating) {
+      return lastVisibleSnapshot;
+    }
+
+    return candidate;
+  }, [frozenSnapshot, snapshot, playbackLoading, isAnimating, isFading, appSwitchAnimating, lastVisibleSnapshot]);
+
+  const hasSnapshotTitle = !!displaySnapshot?.props?.title;
+  const hasMediaTitle = !!media?.title;
+  const hasActiveMedia = hasSnapshotTitle || hasMediaTitle;
+
   const effectiveTitle = useMemo(
-    () => (frozenSnapshot || snapshot)?.props?.title || media?.title,
-    [frozenSnapshot, snapshot, media?.title]
+    () => displaySnapshot?.props?.title || media?.title,
+    [displaySnapshot, media?.title]
   );
 
   // Track last title to clear stale artist/album when switching songs
@@ -435,7 +517,7 @@ export default function OverlayPage() {
 
   // Only use media fallback if title hasn't changed (same song); otherwise use snapshot values only
   const shouldUseFallback = effectiveTitle === lastTitle;
-  const effectiveSnapshot = frozenSnapshot || snapshot;
+  const effectiveSnapshot = displaySnapshot;
   const effectiveArtist = useMemo(
     () => effectiveSnapshot?.props?.artist || (shouldUseFallback ? media?.artist : ''),
     [effectiveSnapshot?.props?.artist, shouldUseFallback, media?.artist]
@@ -1076,6 +1158,23 @@ export default function OverlayPage() {
     triggerRipple(e);
   };
 
+  const handleWindowDragStart = (e: React.MouseEvent<HTMLElement>) => {
+    if (pinned || e.button !== 0) {
+      return;
+    }
+
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, a, input, textarea, select, [data-no-drag]')) {
+      return;
+    }
+
+    if (currentWindowRef.current) {
+      currentWindowRef.current.startDragging().catch((error: any) => {
+        console.error('startDragging failed', error);
+      });
+    }
+  };
+
   const handleLyricOverlayToggle = async (e: MouseEvent<HTMLButtonElement>): Promise<void> => {
     triggerRipple(e);
 
@@ -1132,10 +1231,8 @@ export default function OverlayPage() {
     <div
       ref={titleContainerRef}
       className="flex-row text-lg font-semibold text-white w-full marquee-container"
-      style={{
-        WebkitAppRegion: pinned ? 'no-drag' : 'drag',
-        userSelect: 'none',
-      } as never}
+      {...dragRegionProps}
+      style={{ userSelect: 'none' } as never}
     >
       <span
         ref={titleInnerRef}
@@ -1150,10 +1247,8 @@ export default function OverlayPage() {
     <div
       ref={artistContainerRef}
       className="flex-row text-sm text-white/80 w-full marquee-container"
-      style={{
-        WebkitAppRegion: pinned ? 'no-drag' : 'drag',
-        userSelect: 'none',
-      } as never}
+      {...dragRegionProps}
+      style={{ userSelect: 'none' } as never}
     >
       <span
         ref={artistInnerRef}
@@ -1165,178 +1260,178 @@ export default function OverlayPage() {
   );
 
   return (
-    <div
-      ref={overlayRef}
-      key="main-overlay-container"
-      className="w-screen h-screen flex items-center flex-start gap-1 flex-row px-2 py-1.5 relative overflow-hidden"
-      style={{ background: 'rgba(0,0,0,0.75)', WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
-    >
-      {/* Background ripples */}
-      {ripples.map((ripple) => (
-        <span
-          key={ripple.id}
-          className="absolute rounded-full bg-white/30 animate-ripple pointer-events-none"
-          style={{
-            width: ripple.size * 2,
-            height: ripple.size * 2,
-            left: ripple.x - ripple.size,
-            top: ripple.y - ripple.size,
-            zIndex: 0,
-          }}
-          onAnimationEnd={() => setRipples((prev) => prev.filter(r => r.id !== ripple.id))}
-        />
-      ))}
-
-      {hasActiveMedia ? (
-        <>
-          <div
-            key={`album-${animationKey}`}
-            className={`flex items-center gap-1 ${isFading && appSwitchDirection
-              ? appSwitchDirection === 'up'
-                ? 'app-slide-out-up opacity-30'
-                : 'app-slide-out-down opacity-30'
-              : isFading
-                ? 'track-fading'
-                : appSwitchAnimating
-                  ? appSwitchDirection === 'up'
-                    ? 'app-slide-in-up'
-                    : 'app-slide-in-down'
-                  : isAnimating && trackChangeDirection
-                    ? trackChangeDirection === 'previous'
-                      ? 'track-slide-in-prev'
-                      : 'track-slide-in-next'
-                    : ''
-              } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
-          >
-            <AlbumArt imageSrc={imageSrc} albumTitle={effectiveAlbumTitle} pinned={pinned} imageKey={imageKey} />
-          </div>
-
-          {/* Player icon - animated for app switches (opposite direction), outside animated wrapper so it doesn't reload on track change */}
-          <StyledImage
-            src={getPlayerInfo(frozenSnapshot?.source_app_id ?? sourceAppId).imageSrc}
-            alt={getPlayerInfo(frozenSnapshot?.source_app_id ?? sourceAppId).name}
-            className={`w-9 h-9 fixed bottom-1.5 left-1 ${isFading && appSwitchDirection
-              ? appSwitchDirection === 'up'
-                ? 'app-slide-out-down opacity-30'
-                : 'app-slide-out-up opacity-30'
-              : appSwitchAnimating
-                ? appSwitchDirection === 'up'
-                  ? 'app-slide-in-down'
-                  : 'app-slide-in-up'
-                : ''
-              } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
-            width={36}
-            height={36}
-            pinned={pinned}
-            unoptimized
+    <div className="w-full h-full" style={{ background: 'transparent', userSelect: 'none', } as never}>
+      <div
+        ref={overlayRef}
+        key="main-overlay-container"
+        className="relative flex h-full w-full overflow-hidden rounded-[8px] border border-white/10"
+        onMouseDown={handleWindowDragStart}
+        style={{
+          background: 'rgba(8,8,8,0.82)',
+          backdropFilter: 'blur(18px)',
+          WebkitBackdropFilter: 'blur(18px)',          
+        } as never}
+      >
+        {/* Background ripples */}
+        {ripples.map((ripple) => (
+          <span
+            key={ripple.id}
+            className="absolute rounded-full bg-white/30 animate-ripple pointer-events-none"
+            style={{
+              width: ripple.size * 2,
+              height: ripple.size * 2,
+              left: ripple.x - ripple.size,
+              top: ripple.y - ripple.size,
+              zIndex: 0,
+            }}
+            onAnimationEnd={() => setRipples((prev) => prev.filter(r => r.id !== ripple.id))}
           />
+        ))}
 
-          {/* Lyrics overlay button */}
-          <button
-            className={`w-9 h-9 fixed bottom-2.25 left-20 rounded-full flex items-center justify-center transition-colors overflow-hidden ${lyricsOverlayOpen
-              ? 'bg-white hover:bg-white/80 text-black'
-              : lyricsLoading
-                ? 'bg-black/60 text-white/60'
-                : lyricsAvailable
-                  ? 'bg-black/60 hover:bg-black/70 text-white'
-                  : 'bg-black/60 hover:bg-black/70 text-red-400'
-              }`}
-            onClick={handleLyricOverlayToggle}
-            title={lyricsLoading ? 'Loading...' : lyricsAvailable ? 'Lyrics' : 'No lyrics available'}
-            style={{ WebkitAppRegion: 'no-drag' } as never}
-          >
-            {lyricsLoading ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <ListMusic size={16} />
-            )}
-          </button>
+        {hasActiveMedia ? (
+          <div className="relative z-10 flex h-full w-full items-center gap-3 px-3 py-2.5">
+            <div
+              className={`relative flex h-full w-[104px] shrink-0 items-center justify-center ${isFading && appSwitchDirection
+                ? appSwitchDirection === 'up'
+                  ? 'app-slide-out-up opacity-30'
+                  : 'app-slide-out-down opacity-30'
+                : isFading
+                  ? 'track-fading'
+                  : appSwitchAnimating
+                    ? appSwitchDirection === 'up'
+                      ? 'app-slide-in-up'
+                      : 'app-slide-in-down'
+                    : isAnimating && trackChangeDirection
+                      ? trackChangeDirection === 'previous'
+                        ? 'track-slide-in-prev'
+                        : 'track-slide-in-next'
+                      : ''
+                } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
+              key={`album-${animationKey}`}
+              {...dragRegionProps}
+            >
+              <AlbumArt imageSrc={imageSrc} albumTitle={effectiveAlbumTitle} pinned={pinned} imageKey={imageKey} />
 
-          <div
-            className={`flex flex-col content-center justify-center shrink-0 transition-opacity duration-150 ${isFading && appSwitchDirection
-              ? appSwitchDirection === 'up'
-                ? 'app-slide-out-up opacity-30'
-                : 'app-slide-out-down opacity-30'
-              : isFading
-                ? 'opacity-30'
-                : appSwitchAnimating
+              <StyledImage
+                src={getPlayerInfo(effectiveSnapshot?.source_app_id ?? sourceAppId).imageSrc}
+                alt={getPlayerInfo(effectiveSnapshot?.source_app_id ?? sourceAppId).name}
+                className={`absolute -bottom-[0.5vh] -left-[1.5vw] h-8 w-8 p-1 shadow-lg ${isFading && appSwitchDirection
                   ? appSwitchDirection === 'up'
-                    ? 'app-slide-in-up'
-                    : 'app-slide-in-down'
-                  : isAnimating && trackChangeDirection
-                    ? trackChangeDirection === 'previous'
-                      ? 'track-slide-in-prev'
-                      : 'track-slide-in-next'
+                    ? 'app-slide-out-down opacity-30'
+                    : 'app-slide-out-up opacity-30'
+                  : appSwitchAnimating
+                    ? appSwitchDirection === 'up'
+                      ? 'app-slide-in-down'
+                      : 'app-slide-in-up'
                     : ''
-              } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
-            style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag', width: '280px', height: '128px', overflow: 'hidden' } as never}
-          >
-            {/* Container for media info and window controls */}
-            <div className="flex flex-row justify-between">
-              <MediaInfo
-                title={TitleComponent}
-                artist={ArtistComponent}
+                  } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
+                width={32}
+                height={32}
                 pinned={pinned}
+                unoptimized
               />
-              {/* Pin and Close buttons - top right corner */}
-              <div className="flex flex-col content-start top-2 right-2.5 z-99" style={{ WebkitAppRegion: 'no-drag' } as never}>
-                <WindowControls pinned={pinned} onPinToggle={handlePinToggle} />
+
+              <button
+                className={`absolute -bottom-[0.5vh] -right-[1.5vw] flex h-8 w-8 items-center justify-center rounded-full border border-white/10 transition-colors overflow-hidden ${lyricsOverlayOpen
+                  ? 'bg-white hover:bg-white/80 text-black'
+                  : lyricsLoading
+                    ? 'bg-black/60 text-white/60'
+                    : lyricsAvailable
+                      ? 'bg-black/60 hover:bg-black/70 text-white'
+                      : 'bg-black/60 hover:bg-black/70 text-red-400'
+                  }`}
+                onClick={handleLyricOverlayToggle}
+                title={lyricsLoading ? 'Loading...' : lyricsAvailable ? 'Lyrics' : 'No lyrics available'}
+                data-no-drag
+              >
+                {lyricsLoading ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <ListMusic size={16} />
+                )}
+              </button>
+            </div>
+
+            <div
+              className={`flex min-w-0 flex-1 flex-col justify-between transition-opacity duration-150 ${isFading && appSwitchDirection
+                ? appSwitchDirection === 'up'
+                  ? 'app-slide-out-up opacity-30'
+                  : 'app-slide-out-down opacity-30'
+                : isFading
+                  ? 'opacity-30'
+                  : appSwitchAnimating
+                    ? appSwitchDirection === 'up'
+                      ? 'app-slide-in-up'
+                      : 'app-slide-in-down'
+                    : isAnimating && trackChangeDirection
+                      ? trackChangeDirection === 'previous'
+                        ? 'track-slide-in-prev'
+                        : 'track-slide-in-next'
+                      : ''
+                } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
+                style={{ minHeight: '100%', overflow: 'hidden' } as never}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <MediaInfo
+                  title={TitleComponent}
+                  artist={ArtistComponent}
+                  pinned={pinned}
+                />
+                <div className="shrink-0" data-no-drag>
+                  <WindowControls pinned={pinned} onPinToggle={handlePinToggle} />
+                </div>
+              </div>
+
+              <div className="mt-0">
+                <MediaTimeline
+                  hasTimeline={!!hasTimeline}
+                  progress={progress}
+                  onProgressClick={handleProgressClick}
+                />
+              </div>
+
+              <div className="mt-0">
+                <MediaControls
+                  isPlaying={isPlaying}
+                  isShuffle={isShuffle}
+                  repeatMode={snapshot?.repeat_mode ?? 'none'}
+                  sourceAppId={effectiveSnapshot?.source_app_id ?? sourceAppId}
+                  pinned={pinned}
+                  playPauseImpact={playPauseImpact}
+                  playbackLoading={playbackLoading}
+                  onPlayPause={withRipple(handlePlayPause)}
+                  onPrevious={withRipple(handlePrevious)}
+                  onNext={withRipple(handleNext)}
+                  onShuffle={withRipple(() => sendPlaybackMode('shuffle', !isShuffle))}
+                  onRepeat={withRipple(() => {
+                    const current = snapshot?.repeat_mode ?? 'none';
+                    let next: 'none' | 'list' | 'track';
+                    if (current === 'none') next = 'list';
+                    else if (current === 'list') next = 'track';
+                    else next = 'none';
+                    sendPlaybackMode('repeat', next);
+                  })}
+                />
               </div>
             </div>
-
-            <MediaTimeline
-              hasTimeline={!!hasTimeline}
-              progress={progress}
-              onProgressClick={handleProgressClick}
-            />
-
-            <MediaControls
-              isPlaying={isPlaying}
-              isShuffle={isShuffle}
-              repeatMode={snapshot?.repeat_mode ?? 'none'}
-              sourceAppId={sourceAppId}
-              pinned={pinned}
-              playPauseImpact={playPauseImpact}
-              playbackLoading={playbackLoading}
-              onPlayPause={withRipple(handlePlayPause)}
-              onPrevious={withRipple(handlePrevious)}
-              onNext={withRipple(handleNext)}
-              onShuffle={withRipple(() => sendPlaybackMode('shuffle', !isShuffle))}
-              onRepeat={withRipple(() => {
-                const current = snapshot?.repeat_mode ?? 'none';
-                let next: 'none' | 'list' | 'track';
-                if (current === 'none') next = 'list';
-                else if (current === 'list') next = 'track';
-                else next = 'none';
-                sendPlaybackMode('repeat', next);
-              })}
-            />
-
           </div>
-        </>
-      ) : (
-        <div className="flex flex-col w-full h-full">
-          {/* Container for window controls */}
-          <div className="flex flex-row justify-end w-full">
-            {/* Pin and Close buttons - top right corner */}
-            <div className="flex flex-col content-start top-2 right-2.5 z-99" style={{ WebkitAppRegion: 'no-drag' } as never}>
+        ) : (
+          <div className="relative z-10 flex h-full w-full flex-col px-3 py-2.5">
+            <div className="flex justify-end" data-no-drag>
               <WindowControls pinned={pinned} onPinToggle={handlePinToggle} />
             </div>
-          </div>
-          <div
-            className="flex flex-col items-center justify-center w-full py-2"
-            style={{ WebkitAppRegion: 'drag' } as never}
-          >
-            <div className="text-sm text-white/60">
-              🔇 No media is currently playing 🔇
-            </div>
-            <div className="text-xs text-white/40 mt-1">
-              🎵 Start playback in your favorite player to see controls here 🎶
+            <div className="flex flex-1 flex-col items-center justify-center text-center" {...dragRegionProps}>
+              <div className="text-sm font-medium text-white/70">
+                No media is currently playing
+              </div>
+              <div className="mt-1 text-xs text-white/45">
+                Start playback in your player and the overlay will animate back in.
+              </div>
             </div>
           </div>
-        </div>
-      )}
-      <UpdateNotification />
+        )}
+        <UpdateNotification />
+      </div>
     </div>
   );
 }

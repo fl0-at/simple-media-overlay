@@ -49,8 +49,8 @@ export function MediaControls({
   return (
     <div
       className="flex items-center gap-3 mt-3 justify-center"
+      data-no-drag
       style={{
-        WebkitAppRegion: pinned ? 'no-drag' : 'drag',
         userSelect: 'none',
       } as never}
     >
@@ -64,7 +64,7 @@ export function MediaControls({
           }
           onClick={onRepeat}
           id="repeat-button"
-          style={{ WebkitAppRegion: 'no-drag' } as never}
+          data-no-drag
           title="Repeat Mode"
         >
           {getRepeatIcon()}
@@ -74,7 +74,7 @@ export function MediaControls({
         className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="back-button"
         onClick={onPrevious}
-        style={{ WebkitAppRegion: 'no-drag' } as never}
+        data-no-drag
         title="Previous"
       >
         <SkipBack />
@@ -83,7 +83,7 @@ export function MediaControls({
         className={`px-3 py-1 rounded-full font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''} ${isPlaying ? 'bg-white text-xs text-black hover:bg-white/80' : 'bg-white/10 text-white hover:bg-white/20'}`}
         id="play-pause-button"
         onClick={onPlayPause}
-        style={{ WebkitAppRegion: 'no-drag' } as never}
+        data-no-drag
         title={isPlaying ? 'Pause' : 'Play'}
       >
         {playbackLoading ? <Loader2 className="animate-spin" /> : isPlaying ? <Pause /> : <Play />}
@@ -92,7 +92,7 @@ export function MediaControls({
         className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="next-button"
         onClick={onNext}
-        style={{ WebkitAppRegion: 'no-drag' } as never}
+        data-no-drag
         title="Next"
       >
         <SkipForward />
@@ -107,7 +107,7 @@ export function MediaControls({
           }
           onClick={onShuffle}
           id="shuffle-button"
-          style={{ WebkitAppRegion: 'no-drag' } as never}
+          data-no-drag
           title="Shuffle"
         >
           <Shuffle />

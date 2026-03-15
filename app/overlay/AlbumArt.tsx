@@ -10,10 +10,12 @@ interface AlbumArtProps {
 }
 
 export function AlbumArt({ imageSrc, albumTitle, pinned, imageKey }: AlbumArtProps) {
+    const dragRegionProps = pinned ? {} : { 'data-tauri-drag-region': '' };
+
     return (
         <div
             className="flex flex-col items-center justify-center p-1"
-            style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
+            {...dragRegionProps}
         >
             <div className="w-24 h-24 shrink-0" style={{ aspectRatio: '1/1' }}>
                 {imageSrc ? (

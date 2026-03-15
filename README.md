@@ -2,7 +2,7 @@
 
 ## About this project
 
-I wanted to build a simple media overlay app that stays on top, so I vibe-coded one. This app uses [tauri](https://v2.tauri.app/) in the backend (using [win-gsmtc](https://docs.rs/win-gsmtc/latest/gsmtc/) to get media info from Windows) and [NextJS](https://nextjs.org/) as the frontend, and honestly, it turned out better than I thought:
+I wanted to build a simple media overlay app that stays on top, so I vibe-coded one. This app uses [tauri](https://v2.tauri.app/) in the backend and [NextJS](https://nextjs.org/) as the frontend, and honestly, it turned out better than I thought:
 
 ![Simple Media Overlay](./assets/SimpleMediaOverlay.png)
 
@@ -24,7 +24,8 @@ I decided to add a second overlay that displays synced lyrics, if available, sin
 
 ## Prerequisites
 
-- **Windows 10 or Windows 11** - This app currently only works on Windows (see [Current Limitations](#current-limitations))
+- **Windows 10 or Windows 11** for the Windows backend via GSMTC
+- **A Linux desktop session with D-Bus and an MPRIS-compatible media player** for the Linux backend
 
 ### Additional requirements for developers
 
@@ -65,7 +66,7 @@ Make sure you have [Rust](https://www.rust-lang.org/tools/install) and the [Taur
 
 ## Supported media playback sources
 
-Any media player or application that publishes metadata about the currently playing media via GSMTC APIs should work out of the box, but these ones were tested and have their own dedicated icons:
+On Windows, any media player or application that publishes metadata about the currently playing media via GSMTC APIs should work out of the box, but these ones were tested and have their own dedicated icons:
 
 - 🌐 Google Chrome
 - 🌎 Microsoft Edge
@@ -89,7 +90,9 @@ For the following apps, I have not tested, but they should have their own icons:
 - ▶️ Groove Media Player
 - ⚡ Winamp
 
-_I also added Kodi, KMPlayer, and Media Player Classic (MPC-HC [as maintained by clsid2](https://github.com/clsid2/mpc-hc)) but later found out they do not actually publish any media metadata via GSMTC APIs, and I can confirm that the overlay will not display media that is played via these apps._
+_I also added Kodi, KMPlayer, and Media Player Classic (MPC-HC [as maintained by clsid2](https://github.com/clsid2/mpc-hc)) but later found out they do not actually publish any media metadata via GSMTC APIs, and I can confirm that the overlay will not display media that is played via these apps on Windows._
+
+On Linux, the overlay uses MPRIS. Any player that exposes standard MPRIS metadata and playback controls on the session bus should be discoverable. Artwork, shuffle, repeat, and seek support still depend on what the individual player exports.
 
 **If you want me to add a specific media player/app icon, please [open a new issue](https://github.com/fl0-at/simple-media-overlay/issues/new)!**
 
@@ -108,20 +111,27 @@ For some reason, the shuffle and repeat functionality don't seem to work when pl
 - 🐒 MediaMonkey 2024
 - 👽 Foobar2000
 
-The following apps also do not publish timeline information via GSMTC APIs:
+The following apps also do not publish timeline information via GSMTC APIs on Windows:
 
 - 🐒 MediaMonkey 2024
 - 👽 Foobar2000
 
-Thumbnails are not provided via GSMTC APIs by these applications:
+Thumbnails are not provided via GSMTC APIs by these applications on Windows:
 
 - 🐒 MediaMonkey 2024
 
-### Windows-only support
+### Platform backends
 
-This app is **currently Windows-only** because it relies on the [win-gsmtc](https://docs.rs/win-gsmtc/latest/gsmtc/) crate to access Windows' Global System Media Transport Controls (GSMTC) APIs. This is the same system that powers the media controls in Windows 11's Quick Settings and lock screen.
+The app now uses platform-specific media backends behind the same Tauri command surface:
 
-I might switch to a cross-platform crate in the future to support macOS and Linux, but for now, Windows 10/11 is required. 🙂
+- Windows uses GSMTC to read the current system media session and send playback controls.
+- Linux uses MPRIS over D-Bus to discover the active player, read metadata, and send playback controls.
+
+### Linux window behavior
+
+On GNOME Wayland sessions, the compositor may ignore the always-on-top hint for undecorated overlay windows even when `alwaysOnTop` is enabled in the Tauri config. This means the overlay and lyrics window may not reliably stay above other windows on distributions such as Zorin OS.
+
+If that happens, you can still enable it manually through the desktop environment: press `Super` + right-click anywhere on the overlay window and turn on the window manager's always-on-top option.
 
 ## Troubleshooting
 
@@ -135,11 +145,13 @@ I might switch to a cross-platform crate in the future to support macOS and Linu
 
 **Media not showing up?**
 
-- Make sure your media player publishes to Windows GSMTC (most modern apps do - see [list of supported players here](#current-limitations))
+- On Windows, make sure your media player publishes to GSMTC (most modern apps do - see [list of supported players here](#current-limitations))
+- On Linux, make sure your media player exposes an MPRIS service on the session D-Bus
 
 **Overlay not staying on top?**
 
 - Some fullscreen apps may override the always-on-top behavior
+- If you are on a Linux distribution using GNOME and Wayland (like ZorinOS), [this is a limiation I cannot change](#linux-window-behavior)
 
 **Can't move the overlay?**
 

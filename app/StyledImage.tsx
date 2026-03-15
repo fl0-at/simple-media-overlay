@@ -39,7 +39,6 @@ export function StyledImage({
         if (fadeIn) setIsLoaded(true);
       }}
       style={{
-        WebkitAppRegion: pinned ? 'no-drag' : 'drag',
         userSelect: 'none',
       } as never}
       width={width}

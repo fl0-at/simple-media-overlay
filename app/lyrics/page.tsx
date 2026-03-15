@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { LogicalSize, getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState, MouseEvent, useRef } from 'react';
 import { WindowControls } from '../WindowControls';
 
@@ -63,7 +63,6 @@ const styles = `
 `;
 
 export default function LyricsPage() {
-    
   const [lyrics, setLyrics] = useState<LyricsData | null>(null);
   const [parsedLyrics, setParsedLyrics] = useState<LyricsLine[]>([]);
   const [currentPosition, setCurrentPosition] = useState(0);
@@ -71,11 +70,22 @@ export default function LyricsPage() {
   const [error, setError] = useState<string | null>(null);
   const [canRetry, setCanRetry] = useState(false);
   const [pinned, setPinned] = useState(false);
+  const dragRegionProps = pinned ? {} : { 'data-tauri-drag-region': '' };
   
   // Centralized ripple state for all overlay ripples
   const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number; size: number }>>([]);
   
   const overlayRef = useRef<HTMLDivElement>(null);
+  const currentWindowRef = useRef<any | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      currentWindowRef.current = getCurrentWindow();
+    } catch {
+      currentWindowRef.current = null;
+    }
+  }, []);
   const [lastFetchParams, setLastFetchParams] = useState<{ title: string; artist: string; album?: string | null; duration?: number | null } | null>(null);
 
   // Parse LRC format synced lyrics
@@ -98,9 +108,13 @@ export default function LyricsPage() {
   };
 
   const handleClose = async () => {
-    const window = getCurrentWindow();
     await emit('lyrics-window-closed');
-    await window.close();
+    if (currentWindowRef.current) {
+      await currentWindowRef.current.close();
+    } else {
+      const win = await getCurrentWindow();
+      await win.close();
+    }
   };
 
   const fetchLyrics = async (title: string, artist: string, albumTitle?: string | null, durationMs?: number | null) => {
@@ -196,10 +210,42 @@ export default function LyricsPage() {
     setPinned(!pinned);
   };
 
+  const handleWindowDragStart = (e: React.MouseEvent<HTMLElement>) => {
+    if (pinned || e.button !== 0) {
+      return;
+    }
+
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, a, input, textarea, select, [data-no-drag]')) {
+      return;
+    }
+
+    if (currentWindowRef.current) {
+      currentWindowRef.current.startDragging().catch((error: any) => {
+        console.error('lyrics startDragging failed', error);
+      });
+    } else {
+      try {
+        getCurrentWindow().startDragging().catch((error: any) => {
+          console.error('lyrics startDragging failed', error);
+        });
+      } catch (e) {
+        console.error('lyrics startDragging failed', e);
+      }
+    }
+  };
+
+
   // Handle context menu prevention
   useEffect(() => {
-    const window = getCurrentWindow();
-    invoke('configure_window_menu', { window });
+    (async () => {
+      const win = currentWindowRef.current ?? getCurrentWindow();
+      try {
+        invoke('configure_window_menu', { window: win });
+      } catch (e) {
+        // ignore
+      }
+    })();
   }, []);
 
   // Always prevent webview context menu (native Windows menu with Move/Close will show instead)
@@ -258,6 +304,46 @@ export default function LyricsPage() {
       if (unlistenPosition) unlistenPosition();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const window = currentWindowRef.current ?? getCurrentWindow();
+    let unlistenFocusChanged: (() => void) | undefined;
+
+    window.setAlwaysOnTop(true).catch((e: any) => {
+      console.error('lyrics setAlwaysOnTop failed', e);
+    });
+
+    window.setSize(new LogicalSize(408, 160)).catch((e: any) => {
+      console.error('lyrics setSize failed', e);
+    });
+
+    window.setShadow(false).catch(() => {
+      // Unsupported on Linux; ignore.
+    });
+
+    const reassertTopmost = () => {
+      window.setAlwaysOnTop(true).catch(() => {
+        // Best effort on Linux window managers.
+      });
+    };
+
+    window.onFocusChanged(({ payload: focused }: { payload: boolean }) => {
+      if (!focused) {
+        reassertTopmost();
+      }
+    }).then((unlisten: any) => {
+      unlistenFocusChanged = unlisten;
+    }).catch(() => {
+      // Ignore if unavailable.
+    });
+
+    document.addEventListener('visibilitychange', reassertTopmost);
+
+    return () => {
+      document.removeEventListener('visibilitychange', reassertTopmost);
+      unlistenFocusChanged?.();
+    };
   }, []);
 
   const renderLyrics = () => {
@@ -358,8 +444,14 @@ export default function LyricsPage() {
       <div
         ref={overlayRef}
         key="lyrics-overlay-container"
-        className="w-screen h-screen flex flex-col relative overflow-hidden"
-        style={{ background: 'rgba(0,0,0,0.85)', userSelect: 'none' } as never}
+        className="w-screen h-screen flex flex-col relative overflow-hidden rounded-[8px] border border-white/10"
+        onMouseDown={handleWindowDragStart}
+        style={{
+          background: 'rgba(10,10,10,0.86)',
+          backdropFilter: 'blur(18px)',
+          WebkitBackdropFilter: 'blur(18px)',
+          userSelect: 'none',
+        } as never}
       >
         {/* Background ripples */}
         {ripples.map((ripple) => (
@@ -379,7 +471,7 @@ export default function LyricsPage() {
         {/* Header with controls */}
         <div
           className="flex items-center justify-between px-3 py-2.5 border-b border-white/10"
-          style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
+          {...dragRegionProps}
         >
           <div className="text-white/60 text-sm font-medium">
             <span>Lyrics provided by </span>
@@ -388,19 +480,19 @@ export default function LyricsPage() {
               target="_blank"
               rel="noopener noreferrer"
               className="underline font-bold text-white"
-              style={{ WebkitAppRegion: 'no-drag' } as never}
+              data-no-drag
               title="https://lrclib.net"
             >
               LRC Library
             </a>
           </div>
-          <div className="flex gap-2" style={{ WebkitAppRegion: 'no-drag' } as never}>
+          <div className="flex gap-2" data-no-drag>
             <WindowControls pinned={pinned} onPinToggle={handlePinToggle} onClose={handleClose} />
           </div>
         </div>
 
         {/* Lyrics content */}
-        <div className="flex-1 overflow-hidden" style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}>
+        <div className="flex-1 overflow-hidden" {...dragRegionProps}>
           {renderLyrics()}
         </div>
       </div>
