@@ -1191,7 +1191,7 @@ export default function OverlayPage() {
             url: '/lyrics',
             title: 'Lyrics provided by LRC Library',
             width: 408,
-            height: 160,
+            height: 200,
             alwaysOnTop: true,
             resizable: false,
             decorations: false,
@@ -1333,7 +1333,9 @@ export default function OverlayPage() {
 
               <button
                 className={`absolute -bottom-[0.5vh] -right-[1.5vw] flex h-8 w-8 items-center justify-center rounded-full border border-white/10 transition-colors overflow-hidden ${lyricsOverlayOpen
-                  ? 'bg-white hover:bg-white/80 text-black'
+                  ? lyricsAvailable 
+                    ? 'bg-white hover:bg-white/80 text-black' 
+                    : 'bg-white hover:bg-white/80 text-red-800'
                   : lyricsLoading
                     ? 'bg-black/60 text-white/60'
                     : lyricsAvailable

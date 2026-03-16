@@ -58,8 +58,15 @@ const styles = `
   }
 
   .lyric-line-inactive {
+    opacity: 0.3;
+    transform: scale(1) translateY(0);
+  }
+
+  .lyric-line-deactivated {
     animation: lyric-deactivate 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards;
   }
+  
+}
 `;
 
 export default function LyricsPage() {
@@ -77,6 +84,7 @@ export default function LyricsPage() {
   
   const overlayRef = useRef<HTMLDivElement>(null);
   const currentWindowRef = useRef<any | null>(null);
+  const noLyricsTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -85,6 +93,16 @@ export default function LyricsPage() {
     } catch {
       currentWindowRef.current = null;
     }
+  }, []);
+
+  // Clear any pending "no lyrics" timeout when component unmounts
+  useEffect(() => {
+    return () => {
+      if (noLyricsTimeoutRef.current) {
+        clearTimeout(noLyricsTimeoutRef.current);
+        noLyricsTimeoutRef.current = null;
+      }
+    };
   }, []);
   const [lastFetchParams, setLastFetchParams] = useState<{ title: string; artist: string; album?: string | null; duration?: number | null } | null>(null);
 
@@ -118,14 +136,28 @@ export default function LyricsPage() {
   };
 
   const fetchLyrics = async (title: string, artist: string, albumTitle?: string | null, durationMs?: number | null) => {
-    // Early return if title or artist is missing
+    // Early return if title or artist is missing — debounce to avoid flicker
     if (!title || !artist) {
-      setLoading(false);
-      setError('No lyrics available');
-      setCanRetry(false);
-      setLyrics(null);
-      setParsedLyrics([]);
+      if (noLyricsTimeoutRef.current) {
+        clearTimeout(noLyricsTimeoutRef.current);
+        noLyricsTimeoutRef.current = null;
+      }
+      noLyricsTimeoutRef.current = window.setTimeout(() => {
+        setLoading(false);
+        setError('No lyrics available');
+        setCanRetry(false);
+        setLyrics(null);
+        setParsedLyrics([]);
+        noLyricsTimeoutRef.current = null;
+      }, 500);
+
       return;
+    }
+
+    // Cancel any pending "no lyrics" timeout when we have valid metadata
+    if (noLyricsTimeoutRef.current) {
+      clearTimeout(noLyricsTimeoutRef.current);
+      noLyricsTimeoutRef.current = null;
     }
 
     setLoading(true);
@@ -280,6 +312,15 @@ export default function LyricsPage() {
         }
 
         currentTrackKey = trackKey;
+
+        // Immediately show loading while metadata/lyrics settle and clear any pending "no lyrics" timeout
+        setLoading(true);
+        setError(null);
+        if (noLyricsTimeoutRef.current) {
+          clearTimeout(noLyricsTimeoutRef.current);
+          noLyricsTimeoutRef.current = null;
+        }
+
         setLastFetchParams({ title, artist, album: albumTitle, duration: durationMs });
         await fetchLyrics(title, artist, albumTitle, durationMs);
       });
@@ -350,9 +391,11 @@ export default function LyricsPage() {
     if (loading) {
       return (
         <div className="flex flex-col justify-center h-full px-6 space-y-1.5">
+          <div className="h-4 bg-white/10 rounded animate-pulse mx-auto w-2/4"></div>
           <div className="h-4 bg-white/10 rounded animate-pulse mx-auto w-3/4"></div>
           <div className="h-5 bg-white/20 rounded animate-pulse mx-auto w-5/6"></div>
           <div className="h-4 bg-white/10 rounded animate-pulse mx-auto w-3/4"></div>
+          <div className="h-4 bg-white/10 rounded animate-pulse mx-auto w-2/4"></div>
         </div>
       );
     }
@@ -400,23 +443,32 @@ export default function LyricsPage() {
         return adjustedPosition >= line.timestamp && (!nextLine || adjustedPosition < nextLine.timestamp);
       });
 
-      // Show previous, current, and next lines
-      const startIdx = Math.max(0, currentIndex - 1);
-      const endIdx = Math.min(parsedLyrics.length, currentIndex + 2);
+      // Show previous 2, current, and next 2 lines
+      const safeIndex = currentIndex === -1 ? 0 : currentIndex;
+      const startIdx = Math.max(0, safeIndex - 2);
+      const endIdx = Math.min(parsedLyrics.length, safeIndex + 3);
       const visibleLines = parsedLyrics.slice(startIdx, endIdx);
 
+      // calculate ripple translate so ripple centers on the active line in the visible window
+      const visibleCount = visibleLines.length;
+      const centerIndex = Math.floor(visibleCount / 2);
+      const activeVisibleIndex = safeIndex - startIdx;
+      const LINE_HEIGHT_PX = 20; // adjust to match your rendered line-height
+      const rippleTranslateY = (activeVisibleIndex - centerIndex) * LINE_HEIGHT_PX;
+
       return (
-        <div className="flex flex-col justify-center h-full px-6 space-y-1.5">
-          {visibleLines.map((line, idx) => {
+        <div
+          className="flex flex-col justify-center h-full px-6 space-y-1.5 lyrics-ripple"
+          style={{ ['--ripple-translate-y' as any]: `${rippleTranslateY}px` }}
+        >
+          {visibleLines.map((line, idx, allLines) => {
             const actualIdx = startIdx + idx;
             const nextLine = parsedLyrics[actualIdx + 1];
-            const isActive = adjustedPosition >= line.timestamp && (!nextLine || adjustedPosition < nextLine.timestamp);
-
+            const isActive = adjustedPosition >= line.timestamp && (!nextLine || adjustedPosition < nextLine.timestamp);                        
             return (
               <div
                 key={actualIdx}
-                className={`text-center leading-tight text-[15px] ${isActive ? 'lyric-line-active' : 'lyric-line-inactive'
-                  }`}
+                className={`text-center leading-tight text-[15px] ${isActive ? 'lyric-line-active' : idx === allLines.length - 1 ? 'lyric-line-inactive' : 'lyric-line-deactivated'}`}
                 style={{
                   color: isActive ? 'rgba(255, 255, 255, 1)' : 'rgba(255, 255, 255, 0.3)',
                   fontWeight: isActive ? 600 : 400,
@@ -427,7 +479,7 @@ export default function LyricsPage() {
               </div>
             );
           })}
-        </div>
+        </div>        
       );
     }
 
