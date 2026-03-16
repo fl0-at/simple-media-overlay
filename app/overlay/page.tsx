@@ -1417,15 +1417,15 @@ export default function OverlayPage() {
           </div>
         ) : (
           <div className="relative z-10 flex h-full w-full flex-col px-3 py-2.5">
-            <div className="flex justify-end" data-no-drag>
+            <div className="flex justify-end z-99" {...dragRegionProps}>
               <WindowControls pinned={pinned} onPinToggle={handlePinToggle} />
             </div>
-            <div className="flex flex-1 flex-col items-center justify-center text-center" {...dragRegionProps}>
+            <div className="flex flex-1 flex-col items-center justify-center text-center py-2 -mt-6" {...dragRegionProps}>
               <div className="text-sm font-medium text-white/70">
-                No media is currently playing
+                🔇 No media is currently playing 🔇
               </div>
               <div className="mt-1 text-xs text-white/45">
-                Start playback in your player and the overlay will animate back in.
+                🎵 Start playback in your favorite player to see controls here 🎶
               </div>
             </div>
           </div>
