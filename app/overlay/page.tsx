@@ -92,6 +92,7 @@ export default function OverlayPage() {
   const [snapshot, setSnapshot] = useState<MediaSnapshotDto | null>(null);
   const currentSnapshotRef = useRef<MediaSnapshotDto | null>(null);
   const pendingSnapshotRef = useRef<MediaSnapshotDto | null>(null);
+  const appSwitchingRef = useRef<boolean>(false);
   const [playElapsedMs, setPlayElapsedMs] = useState(0);
   const [pinned, setPinned] = useState(false);
   const dragRegionProps = pinned ? {} : { 'data-tauri-drag-region': '' };
@@ -100,6 +101,7 @@ export default function OverlayPage() {
   const [lyricsLoading, setLyricsLoading] = useState(false);
   const [playbackLoading, setPlaybackLoading] = useState(false);
   const playbackLoadingTimeoutRef = useRef<number | null>(null);
+  const appSwitchTimeoutRef = useRef<number | null>(null);
 
   // Track change animation state
   const [trackChangeDirection, setTrackChangeDirection] = useState<'next' | 'previous' | null>(null);
@@ -177,29 +179,76 @@ export default function OverlayPage() {
       const currentSourceAppId = currentSnapshotRef.current?.source_app_id ?? null;
 
       // Check if this is an app switch
-      if (currentSourceAppId !== null && newSourceAppId !== currentSourceAppId) {
+      if (currentSourceAppId !== null && newSourceAppId !== currentSourceAppId) {        
+          // Store both old and new snapshots and debounce the app-switch animation
+          previousSnapshotRef.current = currentSnapshotRef.current;
+          pendingSnapshotRef.current = event.payload;
 
-        // Store both old and new snapshots
-        previousSnapshotRef.current = currentSnapshotRef.current;
-        pendingSnapshotRef.current = event.payload;
+          // DON'T update currentSnapshotRef yet - we need it to stay as the old snapshot
+          // for the freeze to work correctly. It will be updated in the effect.
 
-        console.log('[App Switch Detected]', {
-          previousAppId: currentSourceAppId,
-          newAppId: newSourceAppId,
-          previousTitle: currentSnapshotRef.current?.props.title,
-          newTitle: event.payload.props.title,
-        });
+          // Debounce the app switch to avoid false positives
+          if (appSwitchTimeoutRef.current !== null) {
+            clearTimeout(appSwitchTimeoutRef.current);
+            appSwitchTimeoutRef.current = null;
+          }
 
-        // DON'T update currentSnapshotRef yet - we need it to stay as the old snapshot
-        // for the freeze to work correctly. It will be updated in the effect.
+          appSwitchTimeoutRef.current = window.setTimeout(() => {
+            console.log('[App Switch Detected]', {
+              previousAppId: currentSourceAppId,
+              newAppId: newSourceAppId,
+              previousTitle: currentSnapshotRef.current?.props.title,
+              newTitle: event.payload.props.title,
+            });
 
-        // Trigger the app switch effect
-        setAppSwitchTrigger(prev => prev + 1);
+            // Mark that an app-switch is actually in progress only after debounce
+            // confirms it, avoiding false positives when the debounce is cancelled.
+            appSwitchingRef.current = true;
+            setAppSwitchTrigger(prev => prev + 1);
+            appSwitchTimeoutRef.current = null;
+          }, 500);
+
       } else {
         // Normal update - no app switch
-        previousSnapshotRef.current = currentSnapshotRef.current;
-        currentSnapshotRef.current = event.payload;
-        setSnapshot(event.payload);
+        // Debounce updates that lack title information to avoid flashing "no media playing"
+        const incomingTitle = event.payload.props?.title;
+
+        if (!incomingTitle) {
+          // Start or restart the playback-loading debounce
+          if (playbackLoadingTimeoutRef.current !== null) {
+            clearTimeout(playbackLoadingTimeoutRef.current);
+            playbackLoadingTimeoutRef.current = null;
+          }
+
+          // If an app-switch debounce was pending, cancel it — this normal update supersedes it
+          if (appSwitchTimeoutRef.current !== null) {
+            clearTimeout(appSwitchTimeoutRef.current);
+            appSwitchTimeoutRef.current = null;
+            pendingSnapshotRef.current = null;
+            appSwitchingRef.current = false;
+          }
+
+          setPlaybackLoading(true);
+
+          playbackLoadingTimeoutRef.current = window.setTimeout(() => {
+            previousSnapshotRef.current = currentSnapshotRef.current;
+            currentSnapshotRef.current = event.payload;
+            setSnapshot(event.payload);
+            setPlaybackLoading(false);
+            playbackLoadingTimeoutRef.current = null;
+          }, 3000);
+        } else {
+          // Valid title arrived — cancel any pending debounce and show immediately
+          if (playbackLoadingTimeoutRef.current !== null) {
+            clearTimeout(playbackLoadingTimeoutRef.current);
+            playbackLoadingTimeoutRef.current = null;
+          }
+
+          previousSnapshotRef.current = currentSnapshotRef.current;
+          currentSnapshotRef.current = event.payload;
+          setSnapshot(event.payload);
+          setPlaybackLoading(false);
+        }
 
         // Emit event for lyrics window
         emit('media-updated', {
@@ -229,6 +278,15 @@ export default function OverlayPage() {
     return () => {
       if (unlisten) unlisten();
       if (lyricsCloseUnlisten) lyricsCloseUnlisten();
+      if (playbackLoadingTimeoutRef.current !== null) {
+        clearTimeout(playbackLoadingTimeoutRef.current);
+        playbackLoadingTimeoutRef.current = null;
+      }
+      if (appSwitchTimeoutRef.current !== null) {
+        clearTimeout(appSwitchTimeoutRef.current);
+        appSwitchTimeoutRef.current = null;
+      }
+      appSwitchingRef.current = false;
     };
   }, []);
 
@@ -324,7 +382,7 @@ export default function OverlayPage() {
     if (lastSourceAppIdRef.current !== current && lastSourceAppIdRef.current !== null) {
       // App switched - force a refresh to get updated snapshot from new app
       invoke('refresh_media_snapshot').catch((e: any) =>
-        console.error('refresh_media_snapshot failed on app switch', e)
+        console.warn('refresh_media_snapshot failed on app switch', e)
       );
       lastSourceAppIdRef.current = current;
     } else if (lastSourceAppIdRef.current === null) {
@@ -335,10 +393,13 @@ export default function OverlayPage() {
 
   useEffect(() => {
     const candidate = frozenSnapshot ?? snapshot;
-    if (candidate?.props?.title) {
+    // Only update the "last visible" snapshot when the UI is in a stable state.
+    // Avoid updating while animations, app-switch transitions, or playback-loading
+    // are in progress, otherwise the fallback image can be overwritten too early.
+    if (candidate?.props?.title && !playbackLoading && !isAnimating && !isFading && !appSwitchAnimating) {
       setLastVisibleSnapshot(candidate);
     }
-  }, [frozenSnapshot, snapshot]);
+  }, [frozenSnapshot, snapshot, playbackLoading, isAnimating, isFading, appSwitchAnimating]);
 
   const displaySnapshot = useMemo(() => {
     const candidate = frozenSnapshot ?? snapshot;
@@ -492,6 +553,7 @@ export default function OverlayPage() {
         setAppSwitchDirection(null);
         setPlayElapsedMs(0);
         pendingSnapshotRef.current = null; // Clear it here after full animation
+        appSwitchingRef.current = false;
       }, 475);
 
       return () => {
@@ -1013,7 +1075,12 @@ export default function OverlayPage() {
   const [imageKeyTimestamp, setImageKeyTimestamp] = useState(0);
 
   useEffect(() => {
-    setImageKeyTimestamp(Date.now());
+    // Avoid forcing an image remount while an app-switch animation is in progress.
+    // When switching apps we prefer to keep the previous/frozen image visible until
+    // the transition completes.
+    if (!appSwitchingRef.current) {
+      setImageKeyTimestamp(Date.now());
+    }
   }, [snapshot?.props?.title, media?.title, snapshot?.source_app_id]);
 
   // Check lyrics availability when track changes
@@ -1049,12 +1116,28 @@ export default function OverlayPage() {
     ? `data:image/png;base64,${effectiveSnapshot.props.album_image}`
     : null;
 
+  const frozenSnapshotImage = frozenSnapshot?.props?.album_image
+    ? `data:image/png;base64,${frozenSnapshot.props.album_image}`
+    : null;
+
+  const lastVisibleSnapshotImage = lastVisibleSnapshot?.props?.album_image
+    ? `data:image/png;base64,${lastVisibleSnapshot.props.album_image}`
+    : null;
+
+  const previousSnapshotImage = previousSnapshotRef.current?.props?.album_image
+    ? `data:image/png;base64,${previousSnapshotRef.current.props.album_image}`
+    : null;
+
   const mediaImage = media?.album_image
     ? `data:image/png;base64,${media.album_image}`
     : null;
 
-  // Prioritize snapshot image, use media image only as fallback when no snapshot is available
-  const imageSrc = snapshotImage || mediaImage;
+  // When an app-switch is pending, prefer the previous snapshot's image so the
+  // album art remains visually frozen regardless of animation direction.
+  // Otherwise, prioritize snapshot image and fall back to media image.
+  const imageSrc = appSwitchingRef.current
+    ? previousSnapshotImage || frozenSnapshotImage || lastVisibleSnapshotImage || snapshotImage || null
+    : lastVisibleSnapshotImage || frozenSnapshotImage || snapshotImage || mediaImage;
 
   const imageKey = `${effectiveSnapshot?.props?.title || media?.title || 'unknown'}-${imageKeyTimestamp}`;
 
