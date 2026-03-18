@@ -496,7 +496,7 @@ export default function LyricsPage() {
       <div
         ref={overlayRef}
         key="lyrics-overlay-container"
-        className="w-screen h-screen flex flex-col relative overflow-hidden rounded-[8px] border border-white/10"
+        className="w-screen h-screen flex flex-col relative overflow-hidden rounded-lg border border-white/10"
         onMouseDown={handleWindowDragStart}
         style={{
           background: 'rgba(10,10,10,0.86)',

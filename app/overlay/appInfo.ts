@@ -22,7 +22,12 @@ export function normalizeAppId(sourceAppId: string | null | undefined): string {
   const beforeBang = lower.includes('!') ? lower.split('!')[0] : lower;
   // Remove any trailing store/package id after an underscore
   const beforeUnderscore = beforeBang.split('_')[0];
-  return beforeUnderscore;
+  // Browsers can expose volatile MPRIS instance suffixes (e.g. chromium.instance12345).
+  // Strip those so same-app snapshots remain stable across track changes.
+  const withoutInstance = beforeUnderscore.split('.instance')[0];
+  return withoutInstance.endsWith('.desktop')
+    ? withoutInstance.slice(0, -'.desktop'.length)
+    : withoutInstance;
 }
 
 /**

@@ -2,9 +2,10 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "windows")]
 use gsmtc::{ManagerEvent, SessionManager, SessionUpdateEvent};
@@ -135,16 +136,67 @@ fn map_repeat_mode_enum(mode: LoopStatus) -> RepeatMode {
     }
 }
 
+fn normalize_source_app_id(source_app_id: Option<&str>) -> String {
+    let Some(source_app_id) = source_app_id else {
+        return String::new();
+    };
+
+    let lower = source_app_id.to_lowercase();
+    let before_bang = lower.split('!').next().unwrap_or_default();
+    let before_underscore = before_bang.split('_').next().unwrap_or_default();
+    let without_instance = before_underscore
+        .split(".instance")
+        .next()
+        .unwrap_or(before_underscore);
+    without_instance
+        .strip_suffix(".desktop")
+        .unwrap_or(without_instance)
+        .to_string()
+}
+
 #[cfg(target_os = "linux")]
-fn get_active_linux_player() -> Result<Option<Player>, String> {
+fn get_player_source_app_id(player: &Player) -> Option<String> {
+    let bus_name = player.bus_name_player_name_part();
+    let bus_source = if bus_name.is_empty() {
+        None
+    } else {
+        Some(bus_name.to_string())
+    };
+
+    bus_source
+        .or_else(|| player.get_desktop_entry().ok().flatten())
+        .or_else(|| {
+            let identity = player.identity();
+            if identity.is_empty() {
+                None
+            } else {
+                Some(identity.to_string())
+            }
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn get_active_linux_player(
+    preferred_source_normalized: Option<&str>,
+) -> Result<Option<Player>, String> {
     let finder =
         PlayerFinder::new().map_err(|e| format!("Failed to connect to MPRIS D-Bus: {e:?}"))?;
     let players = finder
         .iter_players()
         .map_err(|e| format!("Failed to enumerate MPRIS players: {e:?}"))?;
 
-    let mut paused = None;
-    let mut fallback = None;
+    let mut preferred_playing_with_title = None;
+    let mut playing_with_title = None;
+    let mut preferred_playing_without_title = None;
+    let mut playing_without_title = None;
+    let mut preferred_paused_with_title = None;
+    let mut paused_with_title = None;
+    let mut preferred_paused_without_title = None;
+    let mut paused_without_title = None;
+    let mut preferred_fallback_with_title = None;
+    let mut fallback_with_title = None;
+    let mut preferred_fallback_without_title = None;
+    let mut fallback_without_title = None;
 
     for player_result in players {
         let player = match player_result {
@@ -155,15 +207,150 @@ fn get_active_linux_player() -> Result<Option<Player>, String> {
             }
         };
 
+        let has_title = player
+            .get_metadata()
+            .ok()
+            .and_then(|metadata| metadata.title().map(|title| !title.is_empty()))
+            .unwrap_or(false);
+
+        let player_source_normalized =
+            normalize_source_app_id(get_player_source_app_id(&player).as_deref());
+        let matches_preferred = preferred_source_normalized
+            .map(|preferred| !preferred.is_empty() && preferred == player_source_normalized)
+            .unwrap_or(false);
+
         match player.get_playback_status() {
-            Ok(PlaybackStatus::Playing) => return Ok(Some(player)),
-            Ok(PlaybackStatus::Paused) if paused.is_none() => paused = Some(player),
-            _ if fallback.is_none() => fallback = Some(player),
+            Ok(PlaybackStatus::Playing)
+                if has_title && matches_preferred && preferred_playing_with_title.is_none() =>
+            {
+                preferred_playing_with_title = Some(player)
+            }
+            Ok(PlaybackStatus::Playing) if has_title && playing_with_title.is_none() => {
+                playing_with_title = Some(player)
+            }
+            Ok(PlaybackStatus::Playing)
+                if matches_preferred && preferred_playing_without_title.is_none() =>
+            {
+                preferred_playing_without_title = Some(player)
+            }
+            Ok(PlaybackStatus::Playing) if playing_without_title.is_none() => {
+                playing_without_title = Some(player)
+            }
+            Ok(PlaybackStatus::Paused)
+                if has_title && matches_preferred && preferred_paused_with_title.is_none() =>
+            {
+                preferred_paused_with_title = Some(player)
+            }
+            Ok(PlaybackStatus::Paused) if has_title && paused_with_title.is_none() => {
+                paused_with_title = Some(player)
+            }
+            Ok(PlaybackStatus::Paused)
+                if matches_preferred && preferred_paused_without_title.is_none() =>
+            {
+                preferred_paused_without_title = Some(player)
+            }
+            Ok(PlaybackStatus::Paused) if paused_without_title.is_none() => {
+                paused_without_title = Some(player)
+            }
+            _ if has_title && matches_preferred && preferred_fallback_with_title.is_none() => {
+                preferred_fallback_with_title = Some(player)
+            }
+            _ if has_title && fallback_with_title.is_none() => fallback_with_title = Some(player),
+            _ if matches_preferred && preferred_fallback_without_title.is_none() => {
+                preferred_fallback_without_title = Some(player)
+            }
+            _ if fallback_without_title.is_none() => fallback_without_title = Some(player),
             _ => {}
         }
     }
 
-    Ok(paused.or(fallback))
+    Ok(
+        preferred_playing_with_title
+            .or(playing_with_title)
+            .or(preferred_playing_without_title)
+            .or(playing_without_title)
+            .or(preferred_paused_with_title)
+            .or(preferred_paused_without_title)
+            .or(paused_with_title)
+            .or(paused_without_title)
+            .or(preferred_fallback_with_title)
+            .or(preferred_fallback_without_title)
+            .or(fallback_with_title)
+            .or(fallback_without_title),
+    )
+}
+
+#[cfg(target_os = "linux")]
+async fn get_preferred_source_normalized(state: &Arc<MediaState>) -> Option<String> {
+    let snapshot_guard = state.snapshot.lock().await;
+    snapshot_guard
+        .as_ref()
+        .map(|existing| normalize_source_app_id(existing.source_app_id.as_deref()))
+        .filter(|source| !source.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn is_suspicious_source_flip(previous: Option<&MediaSnapshotDto>, incoming: &MediaSnapshotDto) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+
+    let previous_source = normalize_source_app_id(previous.source_app_id.as_deref());
+    let incoming_source = normalize_source_app_id(incoming.source_app_id.as_deref());
+    let source_changed = !previous_source.is_empty()
+        && !incoming_source.is_empty()
+        && previous_source != incoming_source;
+
+    // During track transitions, MPRIS can briefly surface a paused player from a
+    // different app. Ignore that flip while previous source is still playing.
+    source_changed && previous.is_playing && !incoming.is_playing
+}
+
+#[cfg(target_os = "linux")]
+fn sanitize_suspicious_track_position(
+    previous: Option<&MediaSnapshotDto>,
+    incoming: &mut MediaSnapshotDto,
+) {
+    if !incoming.is_playing {
+        return;
+    }
+
+    let Some(duration_ms) = incoming.duration_ms else {
+        return;
+    };
+    if duration_ms <= 0 {
+        return;
+    }
+
+    let Some(position_ms) = incoming.position_ms else {
+        return;
+    };
+    if position_ms <= 0 {
+        return;
+    }
+
+    let Some(previous) = previous else {
+        return;
+    };
+
+    let previous_source = normalize_source_app_id(previous.source_app_id.as_deref());
+    let incoming_source = normalize_source_app_id(incoming.source_app_id.as_deref());
+    if previous_source.is_empty() || previous_source != incoming_source {
+        return;
+    }
+
+    let metadata_changed = previous.props.title != incoming.props.title
+        || previous.props.artist != incoming.props.artist
+        || previous.props.album_title != incoming.props.album_title;
+    if !metadata_changed {
+        return;
+    }
+
+    // Treat large carry-over positions on same-source track transitions as stale.
+    let stale_threshold_ms = duration_ms.saturating_mul(35) / 100;
+    if position_ms > stale_threshold_ms {
+        incoming.position_ms = Some(0);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -251,26 +438,7 @@ fn snapshot_from_player(
         .map_err(|e| format!("Failed to get MPRIS loop status: {e:?}"))?
         .map(map_repeat_mode_enum);
 
-    let source_app_id = player
-        .get_desktop_entry()
-        .ok()
-        .flatten()
-        .or_else(|| {
-            let bus_name = player.bus_name_player_name_part();
-            if bus_name.is_empty() {
-                None
-            } else {
-                Some(bus_name.to_string())
-            }
-        })
-        .or_else(|| {
-            let identity = player.identity();
-            if identity.is_empty() {
-                None
-            } else {
-                Some(identity.to_string())
-            }
-        });
+    let source_app_id = get_player_source_app_id(player);
 
     Ok(MediaSnapshotDto {
         props: MediaPropsDto {
@@ -291,8 +459,9 @@ fn snapshot_from_player(
 #[cfg(target_os = "linux")]
 fn refresh_linux_snapshot_sync(
     cache: Option<&StdMutex<HashMap<String, String>>>,
+    preferred_source_normalized: Option<&str>,
 ) -> Result<Option<MediaSnapshotDto>, String> {
-    let Some(player) = get_active_linux_player()? else {
+    let Some(player) = get_active_linux_player(preferred_source_normalized)? else {
         return Ok(None);
     };
 
@@ -340,8 +509,8 @@ fn set_shuffle_sync(active: bool) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn set_shuffle_sync(active: bool) -> Result<(), String> {
-    let Some(player) = get_active_linux_player()? else {
+fn set_shuffle_sync(active: bool, preferred_source_normalized: Option<&str>) -> Result<(), String> {
+    let Some(player) = get_active_linux_player(preferred_source_normalized)? else {
         return Ok(());
     };
 
@@ -369,8 +538,11 @@ fn set_repeat_sync(mode: RepeatMode) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn set_repeat_sync(mode: RepeatMode) -> Result<(), String> {
-    let Some(player) = get_active_linux_player()? else {
+fn set_repeat_sync(
+    mode: RepeatMode,
+    preferred_source_normalized: Option<&str>,
+) -> Result<(), String> {
+    let Some(player) = get_active_linux_player(preferred_source_normalized)? else {
         return Ok(());
     };
 
@@ -388,13 +560,35 @@ fn set_repeat_sync(mode: RepeatMode) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(target_os = "windows")]
 async fn set_shuffle(active: bool) -> Result<(), String> {
     set_shuffle_sync(active)
 }
 
 #[tauri::command]
+#[cfg(target_os = "linux")]
+async fn set_shuffle(
+    active: bool,
+    state: State<'_, Arc<MediaState>>,
+) -> Result<(), String> {
+    let preferred_source = get_preferred_source_normalized(state.inner()).await;
+    set_shuffle_sync(active, preferred_source.as_deref())
+}
+
+#[tauri::command]
+#[cfg(target_os = "windows")]
 async fn set_repeat(mode: RepeatMode) -> Result<(), String> {
     set_repeat_sync(mode)
+}
+
+#[tauri::command]
+#[cfg(target_os = "linux")]
+async fn set_repeat(
+    mode: RepeatMode,
+    state: State<'_, Arc<MediaState>>,
+) -> Result<(), String> {
+    let preferred_source = get_preferred_source_normalized(state.inner()).await;
+    set_repeat_sync(mode, preferred_source.as_deref())
 }
 
 #[cfg(target_os = "windows")]
@@ -611,6 +805,8 @@ struct MediaState {
     last_cached_title: Mutex<Option<String>>,
     // Cache of lyrics keyed by (artist|title)
     lyrics_cache: StdMutex<HashMap<String, LyricsResponse>>,
+    // Prevent duplicate listener loops when frontend re-invokes start_media_listener.
+    listener_started: AtomicBool,
 }
 
 #[tauri::command]
@@ -966,6 +1162,11 @@ async fn start_media_listener(
 ) -> Result<(), String> {
     let state_arc = state.inner().clone();
 
+    if state_arc.listener_started.swap(true, Ordering::SeqCst) {
+        log::debug!("start_media_listener called again; listener already running");
+        return Ok(());
+    }
+
     // Spawn gsmTc polling loop (defensive, helps with TIDAL etc.).
     {
         let app = app_handle.clone();
@@ -1077,15 +1278,111 @@ async fn start_media_listener(
 ) -> Result<(), String> {
     let state_arc = state.inner().clone();
 
+    if state_arc.listener_started.swap(true, Ordering::SeqCst) {
+        log::debug!("start_media_listener called again; listener already running");
+        return Ok(());
+    }
+
     tauri::async_runtime::spawn(async move {
+        let mut pending_source_switch: Option<(String, Instant)> = None;
+
         loop {
-            match refresh_linux_snapshot_sync(Some(&state_arc.thumbnail_cache)) {
-                Ok(Some(snap)) => {
+            let previous_snapshot = {
+                let snapshot_guard = state_arc.snapshot.lock().await;
+                snapshot_guard.clone()
+            };
+
+            let preferred_source = previous_snapshot.as_ref().and_then(|existing| {
+                if !existing.is_playing {
+                    return None;
+                }
+
+                let normalized = normalize_source_app_id(existing.source_app_id.as_deref());
+                if normalized.is_empty() {
+                    None
+                } else {
+                    Some(normalized)
+                }
+            });
+            let preferred_source_ref = preferred_source.as_deref().filter(|source| !source.is_empty());
+
+            match refresh_linux_snapshot_sync(
+                Some(&state_arc.thumbnail_cache),
+                preferred_source_ref,
+            ) {
+                Ok(Some(mut snap)) => {
+                    sanitize_suspicious_track_position(previous_snapshot.as_ref(), &mut snap);
+
+                    let previous_source = previous_snapshot
+                        .as_ref()
+                        .map(|existing| normalize_source_app_id(existing.source_app_id.as_deref()))
+                        .unwrap_or_default();
+                    let incoming_source = normalize_source_app_id(snap.source_app_id.as_deref());
+
+                    if is_suspicious_source_flip(previous_snapshot.as_ref(), &snap) {
+                        log::debug!(
+                            "linux: suppress suspicious source flip prev_source={} prev_playing={} prev_title='{}' incoming_source={} incoming_playing={} incoming_title='{}'",
+                            previous_source,
+                            previous_snapshot.as_ref().map(|s| s.is_playing).unwrap_or(false),
+                            previous_snapshot
+                                .as_ref()
+                                .map(|s| s.props.title.as_str())
+                                .unwrap_or(""),
+                            incoming_source,
+                            snap.is_playing,
+                            snap.props.title,
+                        );
+                        sleep(Duration::from_millis(140)).await;
+                        continue;
+                    }
+
+                    let source_changed = !previous_source.is_empty()
+                        && !incoming_source.is_empty()
+                        && previous_source != incoming_source;
+
+                    if source_changed {
+                        let should_confirm = match pending_source_switch.as_ref() {
+                            Some((candidate_source, started_at)) if candidate_source == &incoming_source => {
+                                started_at.elapsed() < Duration::from_millis(320)
+                            }
+                            _ => true,
+                        };
+
+                        if should_confirm {
+                            if !matches!(pending_source_switch.as_ref(), Some((candidate_source, _)) if candidate_source == &incoming_source)
+                            {
+                                pending_source_switch = Some((incoming_source.clone(), Instant::now()));
+                            }
+
+                            log::debug!(
+                                "linux: holding source switch for confirmation prev_source={} incoming_source={} title='{}' playing={}",
+                                previous_source,
+                                incoming_source,
+                                snap.props.title,
+                                snap.is_playing,
+                            );
+
+                            // Wait for another poll from the same source before accepting
+                            // a source switch. This filters transient MPRIS source blips
+                            // that can happen during track transitions.
+                            sleep(Duration::from_millis(120)).await;
+                            continue;
+                        }
+
+                        log::debug!(
+                            "linux: accepted source switch prev_source={} incoming_source={} title='{}' playing={}",
+                            previous_source,
+                            incoming_source,
+                            snap.props.title,
+                            snap.is_playing,
+                        );
+                        pending_source_switch = None;
+                    } else {
+                        pending_source_switch = None;
+                    }
+
                     let previous_props = {
-                        let snapshot_guard = state_arc.snapshot.lock().await;
-                        snapshot_guard
-                            .as_ref()
-                            .map(|existing| existing.props.clone())
+                        previous_snapshot.as_ref().map(|existing| existing.props.clone())
                     };
 
                     let mut snapshot_guard = state_arc.snapshot.lock().await;
@@ -1104,6 +1401,17 @@ async fn start_media_listener(
                         if props_changed {
                             let _ = app_handle.emit("media_update", snap.props.clone());
                         }
+
+                        log::debug!(
+                            "linux: emit media_snapshot source={} playing={} title='{}' artist='{}' position_ms={:?} duration_ms={:?} has_image={}",
+                            incoming_source,
+                            snap.is_playing,
+                            snap.props.title,
+                            snap.props.artist,
+                            snap.position_ms,
+                            snap.duration_ms,
+                            snap.props.album_image.is_some(),
+                        );
 
                         let _ = app_handle.emit("media_snapshot", snap.clone());
 
@@ -1191,8 +1499,11 @@ fn control_current_session_sync(action: MediaAction) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn control_current_session_sync(action: MediaAction) -> Result<(), String> {
-    let Some(player) = get_active_linux_player()? else {
+fn control_current_session_sync(
+    action: MediaAction,
+    preferred_source_normalized: Option<&str>,
+) -> Result<(), String> {
+    let Some(player) = get_active_linux_player(preferred_source_normalized)? else {
         return Ok(());
     };
 
@@ -1218,8 +1529,19 @@ fn control_current_session_sync(action: MediaAction) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(target_os = "windows")]
 async fn control_media(action: MediaAction) -> Result<(), String> {
     control_current_session_sync(action)
+}
+
+#[tauri::command]
+#[cfg(target_os = "linux")]
+async fn control_media(
+    action: MediaAction,
+    state: State<'_, Arc<MediaState>>,
+) -> Result<(), String> {
+    let preferred_source = get_preferred_source_normalized(state.inner()).await;
+    control_current_session_sync(action, preferred_source.as_deref())
 }
 
 #[tauri::command]
@@ -1265,8 +1587,12 @@ async fn seek_to(position_ms: i64) -> Result<(), String> {
 
 #[tauri::command]
 #[cfg(target_os = "linux")]
-async fn seek_to(position_ms: i64) -> Result<(), String> {
-    let Some(player) = get_active_linux_player()? else {
+async fn seek_to(
+    position_ms: i64,
+    state: State<'_, Arc<MediaState>>,
+) -> Result<(), String> {
+    let preferred_source = get_preferred_source_normalized(state.inner()).await;
+    let Some(player) = get_active_linux_player(preferred_source.as_deref())? else {
         return Ok(());
     };
 
@@ -1353,9 +1679,52 @@ async fn refresh_media_snapshot(
     app: tauri::AppHandle,
     state: State<'_, Arc<MediaState>>,
 ) -> Result<(), String> {
-    let Some(snap) = refresh_linux_snapshot_sync(Some(&state.thumbnail_cache))? else {
+    let previous_snapshot = {
+        let snapshot_guard = state.snapshot.lock().await;
+        snapshot_guard.clone()
+    };
+
+    let preferred_source = previous_snapshot.as_ref().and_then(|existing| {
+        if !existing.is_playing {
+            return None;
+        }
+
+        let normalized = normalize_source_app_id(existing.source_app_id.as_deref());
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    });
+    let preferred_source_ref = preferred_source.as_deref();
+
+    let Some(mut snap) = refresh_linux_snapshot_sync(
+        Some(&state.thumbnail_cache),
+        preferred_source_ref,
+    )? else {
         return Ok(());
     };
+
+    sanitize_suspicious_track_position(previous_snapshot.as_ref(), &mut snap);
+
+    if is_suspicious_source_flip(previous_snapshot.as_ref(), &snap) {
+        log::debug!(
+            "linux: refresh ignored suspicious flip prev_source={} prev_playing={} prev_title='{}' incoming_source={} incoming_playing={} incoming_title='{}'",
+            previous_snapshot
+                .as_ref()
+                .map(|s| normalize_source_app_id(s.source_app_id.as_deref()))
+                .unwrap_or_default(),
+            previous_snapshot.as_ref().map(|s| s.is_playing).unwrap_or(false),
+            previous_snapshot
+                .as_ref()
+                .map(|s| s.props.title.as_str())
+                .unwrap_or(""),
+            normalize_source_app_id(snap.source_app_id.as_deref()),
+            snap.is_playing,
+            snap.props.title,
+        );
+        return Ok(());
+    }
 
     let mut snapshot_guard = state.snapshot.lock().await;
     *snapshot_guard = Some(snap.clone());
@@ -1364,6 +1733,17 @@ async fn refresh_media_snapshot(
     let mut props_guard = state.props.lock().await;
     *props_guard = Some(snap.props.clone());
     drop(props_guard);
+
+    log::debug!(
+        "linux: refresh emit media_snapshot source={} playing={} title='{}' artist='{}' position_ms={:?} duration_ms={:?} has_image={}",
+        normalize_source_app_id(snap.source_app_id.as_deref()),
+        snap.is_playing,
+        snap.props.title,
+        snap.props.artist,
+        snap.position_ms,
+        snap.duration_ms,
+        snap.props.album_image.is_some(),
+    );
 
     let _ = app.emit("media_snapshot", snap.clone());
     let _ = app.emit("media_update", snap.props.clone());
