@@ -6,9 +6,9 @@ This project uses automated version bumping and releases via GitHub Actions.
 
 ### Automatic Version Bumping
 
-When you push to the `main`, `master`, or `develop` branch, the version is automatically bumped based on your commit message:
+When you push to the `master` or `develop` branch, the version is automatically bumped based on your commit message:
 
-- `main` / `master` create stable releases (for production users)
+- `master` creates stable releases (for production users)
 - `develop` creates experimental prereleases
 
 #### Version Bump Types
@@ -69,7 +69,7 @@ git commit -m "perf: optimize media timeline rendering"
 
    ```bash
    # stable release flow
-   git push origin main
+   git push origin master
 
    # experimental prerelease flow
    git push origin develop
