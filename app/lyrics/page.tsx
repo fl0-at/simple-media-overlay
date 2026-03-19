@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
 import { LogicalSize, getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState, MouseEvent, useRef } from 'react';
+import type { CSSProperties } from 'react';
 import { WindowControls } from '../WindowControls';
 
 interface LyricsData {
@@ -83,7 +84,7 @@ export default function LyricsPage() {
   const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number; size: number }>>([]);
   
   const overlayRef = useRef<HTMLDivElement>(null);
-  const currentWindowRef = useRef<any | null>(null);
+  const currentWindowRef = useRef<ReturnType<typeof getCurrentWindow> | null>(null);
   const noLyricsTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -253,15 +254,15 @@ export default function LyricsPage() {
     }
 
     if (currentWindowRef.current) {
-      currentWindowRef.current.startDragging().catch((error: any) => {
+      currentWindowRef.current.startDragging().catch((error: unknown) => {
         console.error('lyrics startDragging failed', error);
       });
     } else {
       try {
-        getCurrentWindow().startDragging().catch((error: any) => {
+        getCurrentWindow().startDragging().catch((error: unknown) => {
           console.error('lyrics startDragging failed', error);
         });
-      } catch (e) {
+      } catch (e: unknown) {
         console.error('lyrics startDragging failed', e);
       }
     }
@@ -274,7 +275,7 @@ export default function LyricsPage() {
       const win = currentWindowRef.current ?? getCurrentWindow();
       try {
         invoke('configure_window_menu', { window: win });
-      } catch (e) {
+      } catch {
         // ignore
       }
     })();
@@ -351,11 +352,11 @@ export default function LyricsPage() {
     const window = currentWindowRef.current ?? getCurrentWindow();
     let unlistenFocusChanged: (() => void) | undefined;
 
-    window.setAlwaysOnTop(true).catch((e: any) => {
+    window.setAlwaysOnTop(true).catch((e: unknown) => {
       console.error('lyrics setAlwaysOnTop failed', e);
     });
 
-    window.setSize(new LogicalSize(408, 160)).catch((e: any) => {
+    window.setSize(new LogicalSize(408, 160)).catch((e: unknown) => {
       console.error('lyrics setSize failed', e);
     });
 
@@ -373,7 +374,7 @@ export default function LyricsPage() {
       if (!focused) {
         reassertTopmost();
       }
-    }).then((unlisten: any) => {
+    }).then((unlisten) => {
       unlistenFocusChanged = unlisten;
     }).catch(() => {
       // Ignore if unavailable.
@@ -459,7 +460,7 @@ export default function LyricsPage() {
       return (
         <div
           className="flex flex-col justify-center h-full px-6 space-y-1.5 lyrics-ripple"
-          style={{ ['--ripple-translate-y' as any]: `${rippleTranslateY}px` }}
+          style={{ '--ripple-translate-y': `${rippleTranslateY}px` } as CSSProperties}
         >
           {visibleLines.map((line, idx, allLines) => {
             const actualIdx = startIdx + idx;

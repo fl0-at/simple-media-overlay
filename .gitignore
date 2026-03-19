@@ -19,6 +19,7 @@
 
 # production
 /build
+/src-tauri/target/
 
 # misc
 .DS_Store
@@ -39,6 +40,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-# tauri
-src-tauri/target/**

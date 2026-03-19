@@ -38,7 +38,10 @@ If you want to build from source or contribute to development:
 
 ### For end users
 
-Simply download either the MSI installer from the [latest release](https://github.com/fl0-at/simple-media-overlay/releases/latest).
+Download the installer for your platform from the [latest release](https://github.com/fl0-at/simple-media-overlay/releases/latest):
+
+- **Windows**: MSI installer
+- **Linux**: AppImage
 
 The app includes automatic updates - you'll be notified when a new version is available, and the app will automatically update and restart!
 

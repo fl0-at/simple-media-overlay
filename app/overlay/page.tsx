@@ -137,7 +137,7 @@ export default function OverlayPage() {
 
   // Ref for overlay container
   const overlayRef = useRef<HTMLDivElement>(null);
-  const currentWindowRef = useRef<any | null>(null);
+  const currentWindowRef = useRef<ReturnType<typeof getCurrentWindow> | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -177,7 +177,7 @@ export default function OverlayPage() {
     });
 
     // Fetch initial snapshot on mount/refresh
-    invoke('refresh_media_snapshot').catch((e: any) =>
+    invoke('refresh_media_snapshot').catch((e: unknown) =>
       console.warn('refresh_media_snapshot failed on mount', e)
     );
 
@@ -249,7 +249,7 @@ export default function OverlayPage() {
         // Require at least 2 consecutive snapshots from the same candidate source
         // before arming the app-switch debounce. This filters one-off source blips.
         if (pendingAppSwitchSourceHitsRef.current < requiredCandidateHits) {
-          console.debug('[App Switch Candidate]', {
+          console.warn('[App Switch Candidate]', {
             previousAppId: normalizedCurrentSourceAppId,
             candidateAppId: normalizedNewSourceAppId,
             hits: pendingAppSwitchSourceHitsRef.current,
@@ -276,7 +276,7 @@ export default function OverlayPage() {
               return;
             }
 
-            console.log('[App Switch Detected]', {
+            console.warn('[App Switch Detected]', {
               previousAppId: normalizedCurrentSourceAppId,
               newAppId: pendingSourceAppId,
               previousTitle: currentSnapshotRef.current?.props.title,
@@ -297,7 +297,7 @@ export default function OverlayPage() {
           normalizedCurrentSourceAppId !== normalizedNewSourceAppId;
 
         if (crossSourceCandidate) {
-          console.debug('[App Switch Candidate Cancelled]', {
+          console.warn('[App Switch Candidate Cancelled]', {
             previousAppId: normalizedCurrentSourceAppId,
             candidateAppId: normalizedNewSourceAppId,
             title: nextPayload.props.title,
@@ -427,7 +427,7 @@ export default function OverlayPage() {
       if (!focused) {
         reassertTopmost();
       }
-    }).then((unlisten: any) => {
+    }).then((unlisten) => {
       unlistenFocusChanged = unlisten;
     }).catch(() => {
       // Ignore if unavailable.
@@ -494,7 +494,7 @@ export default function OverlayPage() {
     const current = normalizeAppId(snapshot?.source_app_id ?? null);
     if (lastSourceAppIdRef.current !== current && lastSourceAppIdRef.current !== null) {
       // App switched - force a refresh to get updated snapshot from new app
-      invoke('refresh_media_snapshot').catch((e: any) =>
+      invoke('refresh_media_snapshot').catch((e: unknown) =>
         console.warn('refresh_media_snapshot failed on app switch', e)
       );
       lastSourceAppIdRef.current = current;
@@ -570,7 +570,6 @@ export default function OverlayPage() {
       // Log snapshot progress values for debugging
 
       if (snapshot) {
-        // eslint-disable-next-line no-console
         console.log('[Track Change Detected]', {
           prevTitle: previousTitleRef.current,
           newTitle: currentTitle,
@@ -1278,7 +1277,7 @@ export default function OverlayPage() {
 
   useEffect(() => {
     if (!snapshotImage && mediaImage && !mediaMatchesSnapshot) {
-      console.debug('[Album Art Fallback Blocked]', {
+      console.warn('[Album Art Fallback Blocked]', {
         snapshotTitle: effectiveSnapshot?.props.title,
         snapshotArtist: effectiveSnapshot?.props.artist,
         mediaTitle: media?.title,
@@ -1404,7 +1403,7 @@ export default function OverlayPage() {
     }
 
     if (currentWindowRef.current) {
-      currentWindowRef.current.startDragging().catch((error: any) => {
+      currentWindowRef.current.startDragging().catch((error: unknown) => {
         console.warn('startDragging failed', error);
       });
     }
@@ -1633,7 +1632,6 @@ export default function OverlayPage() {
                   isShuffle={isShuffle}
                   repeatMode={snapshot?.repeat_mode ?? 'none'}
                   sourceAppId={effectiveSnapshot?.source_app_id ?? sourceAppId}
-                  pinned={pinned}
                   playPauseImpact={playPauseImpact}
                   playbackLoading={playbackLoading}
                   onPlayPause={withRipple(handlePlayPause)}

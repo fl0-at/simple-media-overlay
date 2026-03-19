@@ -10,7 +10,6 @@ interface MediaControlsProps {
   isShuffle: boolean;
   repeatMode: RepeatMode;
   sourceAppId: string | null;
-  pinned: boolean;
   playPauseImpact?: boolean;
   playbackLoading?: boolean;
   onPlayPause: (e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -25,7 +24,6 @@ export function MediaControls({
   isShuffle,
   repeatMode,
   sourceAppId,
-  pinned,
   playPauseImpact = false,
   playbackLoading = false,
   onPlayPause,
