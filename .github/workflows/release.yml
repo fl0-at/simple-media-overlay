@@ -49,7 +49,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Generate release notes
         id: generate-notes
@@ -132,13 +132,25 @@ jobs:
           script: |
             const fs = require('fs');
             const releaseNotes = fs.readFileSync('/tmp/release_notes.md', 'utf8');
-            const isPrerelease = '${{ steps.set-tag.outputs.prerelease }}' === 'true';
-            
+            // Determine prerelease server-side from the tag as a fallback
+            const tagName = '${{ steps.set-tag.outputs.tag }}';
+            const explicitPrerelease = '${{ steps.set-tag.outputs.prerelease }}';
+            let isPrerelease = false;
+
+            if (explicitPrerelease === 'true') {
+              isPrerelease = true;
+            } else if (explicitPrerelease === 'false') {
+              isPrerelease = false;
+            } else {
+              // Fallback: treat tags containing "-dev." or other pre-release separators as prerelease
+              isPrerelease = /-dev\.|-alpha\.|-beta\.|-rc\./i.test(tagName);
+            }
+
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: '${{ steps.set-tag.outputs.tag }}',
-              name: '${{ steps.set-tag.outputs.tag }}',
+              tag_name: tagName,
+              name: tagName,
               body: releaseNotes,
               draft: false,
               prerelease: isPrerelease
@@ -165,7 +177,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
