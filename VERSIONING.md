@@ -6,7 +6,10 @@ This project uses automated version bumping and releases via GitHub Actions.
 
 ### Automatic Version Bumping
 
-When you push to the `main` or `master` branch, the version is automatically bumped based on your commit message:
+When you push to the `main`, `master`, or `develop` branch, the version is automatically bumped based on your commit message:
+
+- `main` / `master` create stable releases (for production users)
+- `develop` creates experimental prereleases
 
 #### Version Bump Types
 
@@ -62,16 +65,22 @@ git commit -m "perf: optimize media timeline rendering"
    git commit -m "feat: add support for volume control"
    ```
 
-2. **Push to main**
+2. **Push to your release branch**
 
    ```bash
+   # stable release flow
    git push origin main
+
+   # experimental prerelease flow
+   git push origin develop
    ```
 
 3. **Automated process**:
    - Auto-version workflow detects commit type
    - Bumps version in `package.json`, `tauri.conf.json`, and `Cargo.toml`
-   - Creates a git tag (e.g., `v0.4.0`)
+   - Creates a git tag:
+     - stable: `v0.4.0`
+     - develop prerelease: `v0.4.0-dev.1`
    - Pushes the tag
 
 4. **Release build**:
@@ -79,6 +88,7 @@ git commit -m "perf: optimize media timeline rendering"
    - Generates release notes from commits
    - Builds and signs the app
    - Creates GitHub release with installers
+   - Tags with `-dev.N` are marked as GitHub **Prerelease** automatically
    - Publishes update manifest for auto-updates
 
 5. **Users get updates**:
