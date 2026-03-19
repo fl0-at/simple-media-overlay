@@ -21,7 +21,7 @@ const eslintConfig = defineConfig([
       // Catch console statements
       "no-console": [
         "warn",
-        { allow: ["warn", "error"] },
+        { allow: ["warn", "error", "log"] },
       ],
     },
   },
@@ -32,6 +32,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "src-tauri/target/**",
   ]),
 ]);
 
