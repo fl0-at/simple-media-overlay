@@ -7,10 +7,11 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 interface WindowControlsProps {
   pinned: boolean;
   onPinToggle: (e: MouseEvent<HTMLButtonElement>) => void;
+  onPinPress?: (e: MouseEvent<HTMLButtonElement>) => void;
   onClose?: () => void | Promise<void>;
 }
 
-export function WindowControls({ pinned, onPinToggle, onClose }: WindowControlsProps) {
+export function WindowControls({ pinned, onPinToggle, onPinPress, onClose }: WindowControlsProps) {
   const handleClose = async () => {
     if (onClose) {
       await onClose();
@@ -24,6 +25,7 @@ export function WindowControls({ pinned, onPinToggle, onClose }: WindowControlsP
     <div className="flex gap-2" data-no-drag>
       {/* Pin button */}
       <button
+        onMouseDown={onPinPress}
         onClick={onPinToggle}
         data-no-drag
         className={`relative w-8 h-8 rounded-full transition-colors flex items-center justify-center overflow-hidden ${

@@ -12,6 +12,7 @@ interface MediaControlsProps {
   sourceAppId: string | null;
   playPauseImpact?: boolean;
   playbackLoading?: boolean;
+  onControlPress?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onPlayPause: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onPrevious: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onNext: (e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -26,6 +27,7 @@ export function MediaControls({
   sourceAppId,
   playPauseImpact = false,
   playbackLoading = false,
+  onControlPress,
   onPlayPause,
   onPrevious,
   onNext,
@@ -60,6 +62,7 @@ export function MediaControls({
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
           }
+          onMouseDown={onControlPress}
           onClick={onRepeat}
           id="repeat-button"
           data-no-drag
@@ -71,6 +74,7 @@ export function MediaControls({
       <button
         className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="back-button"
+        onMouseDown={onControlPress}
         onClick={onPrevious}
         data-no-drag
         title="Previous"
@@ -80,6 +84,7 @@ export function MediaControls({
       <button
         className={`px-3 py-1 rounded-full font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''} ${isPlaying ? 'bg-white text-xs text-black hover:bg-white/80' : 'bg-white/10 text-white hover:bg-white/20'}`}
         id="play-pause-button"
+        onMouseDown={onControlPress}
         onClick={onPlayPause}
         data-no-drag
         title={isPlaying ? 'Pause' : 'Play'}
@@ -89,6 +94,7 @@ export function MediaControls({
       <button
         className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="next-button"
+        onMouseDown={onControlPress}
         onClick={onNext}
         data-no-drag
         title="Next"
@@ -103,6 +109,7 @@ export function MediaControls({
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
           }
+          onMouseDown={onControlPress}
           onClick={onShuffle}
           id="shuffle-button"
           data-no-drag

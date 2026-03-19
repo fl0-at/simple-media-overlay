@@ -238,8 +238,11 @@ export default function LyricsPage() {
     setRipples((prev) => [...prev, ripple]);
   };
 
-  const handlePinToggle = async (e: MouseEvent<HTMLButtonElement>) => {
+  const handlePinPress = (e: MouseEvent<HTMLButtonElement>) => {
     triggerRipple(e);
+  };
+
+  const handlePinToggle = async (_e: MouseEvent<HTMLButtonElement>) => {
     setPinned(!pinned);
   };
 
@@ -536,7 +539,7 @@ export default function LyricsPage() {
             </a>
           </div>
           <div className="flex gap-2" data-no-drag>
-            <WindowControls pinned={pinned} onPinToggle={handlePinToggle} onClose={handleClose} />
+            <WindowControls pinned={pinned} onPinPress={handlePinPress} onPinToggle={handlePinToggle} onClose={handleClose} />
           </div>
         </div>
 

@@ -1330,8 +1330,7 @@ export default function OverlayPage() {
   };
 
   // Helper to show loading spinner for next/previous
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const handlePrevious = (e: MouseEvent<HTMLButtonElement>) => {
+  const handlePrevious = (_e: MouseEvent<HTMLButtonElement>) => {
     setPlaybackLoading(true);
     pendingTrackChangeRef.current = 'previous';
     sendControl('previous', setTrackChangeDirection, setIsFading);
@@ -1345,8 +1344,7 @@ export default function OverlayPage() {
     }, 500);
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const handleNext = (e: MouseEvent<HTMLButtonElement>) => {
+  const handleNext = (_e: MouseEvent<HTMLButtonElement>) => {
     setPlaybackLoading(true);
     pendingTrackChangeRef.current = 'next';
     sendControl('next', setTrackChangeDirection, setIsFading);
@@ -1370,22 +1368,18 @@ export default function OverlayPage() {
     setRipples((prev) => [...prev, ripple]);
   };
 
-  // Helper to wrap button handlers to also trigger ripple
-  // Type-safe ripple wrapper for button event handlers
-  const withRipple = (handler: (e: MouseEvent<HTMLButtonElement>) => void) => (e: MouseEvent<HTMLButtonElement>) => {
-    triggerRipple(e);
-    handler(e);
-  };
-
   const handlePlayPause = (_e: MouseEvent<HTMLButtonElement>) => {
     setPlayPauseImpact(true);
     setTimeout(() => setPlayPauseImpact(false), 300);
     sendControl('playPause', setTrackChangeDirection);
   };
 
-  const handlePinToggle = (e: MouseEvent<HTMLButtonElement>) => {
-    setPinned((v) => !v);
+  const handlePinPress = (e: MouseEvent<HTMLButtonElement>) => {
     triggerRipple(e);
+  };
+
+  const handlePinToggle = (_e: MouseEvent<HTMLButtonElement>) => {
+    setPinned((v) => !v);
   };
 
   const handleWindowDragStart = (e: React.MouseEvent<HTMLElement>) => {
@@ -1405,8 +1399,11 @@ export default function OverlayPage() {
     }
   };
 
-  const handleLyricOverlayToggle = async (e: MouseEvent<HTMLButtonElement>): Promise<void> => {
+  const handleLyricOverlayMouseDown = (e: MouseEvent<HTMLButtonElement>) => {
     triggerRipple(e);
+  };
+
+  const handleLyricOverlayToggle = async (_e: MouseEvent<HTMLButtonElement>): Promise<void> => {
 
     try {
       if (!lyricsOverlayOpen) {
@@ -1572,6 +1569,7 @@ export default function OverlayPage() {
                       ? 'bg-black/60 hover:bg-black/70 text-white'
                       : 'bg-black/60 hover:bg-black/70 text-red-400'
                   }`}
+                    onMouseDown={handleLyricOverlayMouseDown}
                 onClick={handleLyricOverlayToggle}
                 title={lyricsLoading ? 'Loading...' : lyricsAvailable ? 'Lyrics' : 'No lyrics available'}
                 data-no-drag
@@ -1610,7 +1608,7 @@ export default function OverlayPage() {
                   pinned={pinned}
                 />
                 <div className="shrink-0" data-no-drag>
-                  <WindowControls pinned={pinned} onPinToggle={handlePinToggle} />
+                  <WindowControls pinned={pinned} onPinPress={handlePinPress} onPinToggle={handlePinToggle} />
                 </div>
               </div>
 
@@ -1630,18 +1628,19 @@ export default function OverlayPage() {
                   sourceAppId={effectiveSnapshot?.source_app_id ?? sourceAppId}
                   playPauseImpact={playPauseImpact}
                   playbackLoading={playbackLoading}
-                  onPlayPause={withRipple(handlePlayPause)}
-                  onPrevious={withRipple(handlePrevious)}
-                  onNext={withRipple(handleNext)}
-                  onShuffle={withRipple(() => sendPlaybackMode('shuffle', !isShuffle))}
-                  onRepeat={withRipple(() => {
+                  onControlPress={triggerRipple}
+                  onPlayPause={handlePlayPause}
+                  onPrevious={handlePrevious}
+                  onNext={handleNext}
+                  onShuffle={() => sendPlaybackMode('shuffle', !isShuffle)}
+                  onRepeat={() => {
                     const current = snapshot?.repeat_mode ?? 'none';
                     let next: 'none' | 'list' | 'track';
                     if (current === 'none') next = 'list';
                     else if (current === 'list') next = 'track';
                     else next = 'none';
                     sendPlaybackMode('repeat', next);
-                  })}
+                  }}
                 />
               </div>
             </div>
@@ -1649,7 +1648,7 @@ export default function OverlayPage() {
         ) : (
           <div className="relative z-10 flex h-full w-full flex-col px-3 py-2.5">
             <div className="flex justify-end z-99" {...dragRegionProps}>
-              <WindowControls pinned={pinned} onPinToggle={handlePinToggle} />
+              <WindowControls pinned={pinned} onPinPress={handlePinPress} onPinToggle={handlePinToggle} />
             </div>
             <div className="flex flex-1 flex-col items-center justify-center text-center py-2 -mt-6" {...dragRegionProps}>
               <div className="text-sm font-medium text-white/70">
