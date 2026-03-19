@@ -89,16 +89,21 @@ jobs:
           NEW_BASE_VERSION="$major.$minor.$patch"
 
           if [ "$BRANCH_NAME" == "develop" ]; then
-            LAST_DEV_TAG=$(git tag -l "v${NEW_BASE_VERSION}-dev.*" --sort=-version:refname | head -n 1)
+            LAST_DEV_TAG=$(git tag -l "v${NEW_BASE_VERSION}-[0-9]*" --sort=-version:refname | head -n 1)
 
             if [ -n "$LAST_DEV_TAG" ]; then
-              LAST_DEV_NUMBER=$(echo "$LAST_DEV_TAG" | sed -E 's/^v[0-9]+\.[0-9]+\.[0-9]+-dev\.([0-9]+)$/\1/')
+              LAST_DEV_NUMBER=$(echo "$LAST_DEV_TAG" | sed -E 's/^v[0-9]+\.[0-9]+\.[0-9]+-([0-9]+)$/\1/')
               NEXT_DEV_NUMBER=$((LAST_DEV_NUMBER + 1))
             else
               NEXT_DEV_NUMBER=1
             fi
 
-            NEW_VERSION="${NEW_BASE_VERSION}-dev.${NEXT_DEV_NUMBER}"
+            if [ "$NEXT_DEV_NUMBER" -gt 65535 ]; then
+              echo "ERROR: prerelease number $NEXT_DEV_NUMBER exceeds MSI limit (65535)"
+              exit 1
+            fi
+
+            NEW_VERSION="${NEW_BASE_VERSION}-${NEXT_DEV_NUMBER}"
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
           else
             NEW_VERSION="$NEW_BASE_VERSION"

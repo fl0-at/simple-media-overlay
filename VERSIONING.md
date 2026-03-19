@@ -80,7 +80,7 @@ git commit -m "perf: optimize media timeline rendering"
    - Bumps version in `package.json`, `tauri.conf.json`, and `Cargo.toml`
    - Creates a git tag:
      - stable: `v0.4.0`
-     - develop prerelease: `v0.4.0-dev.1`
+       - develop prerelease: `v0.4.0-1`
    - Pushes the tag
 
 4. **Release build**:
@@ -88,7 +88,7 @@ git commit -m "perf: optimize media timeline rendering"
    - Generates release notes from commits
    - Builds and signs the app
    - Creates GitHub release with installers
-   - Tags with `-dev.N` are marked as GitHub **Prerelease** automatically
+   - Tags with `-N` (numeric prerelease) are marked as GitHub **Prerelease** automatically
    - Publishes update manifest for auto-updates
 
 5. **Users get updates**:

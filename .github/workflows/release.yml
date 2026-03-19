@@ -142,8 +142,8 @@ jobs:
             } else if (explicitPrerelease === 'false') {
               isPrerelease = false;
             } else {
-              // Fallback: treat tags containing "-dev." or other pre-release separators as prerelease
-              isPrerelease = /-dev\.|-alpha\.|-beta\.|-rc\./i.test(tagName);
+              // Fallback: any tag containing a semver pre-release separator is a prerelease
+              isPrerelease = /-/.test(tagName);
             }
 
             const { data } = await github.rest.repos.createRelease({
