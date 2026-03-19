@@ -9,10 +9,12 @@ interface MediaInfoProps {
 }
 
 export function MediaInfo({ title, artist, pinned }: MediaInfoProps) {
+  const dragRegionProps = pinned ? {} : { 'data-tauri-drag-region': '' };
+
   return (
     <div
-      className="flex items-center gap-0.5 flex-col w-9/13 min-w-9/13 h-12"
-      style={{ WebkitAppRegion: pinned ? 'no-drag' : 'drag' } as never}
+      className="flex min-w-0 flex-1 flex-col justify-center gap-0.5"
+      {...dragRegionProps}
     >
       {title}
       {artist}

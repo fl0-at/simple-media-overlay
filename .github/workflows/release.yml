@@ -16,6 +16,7 @@ jobs:
     outputs:
       release_id: ${{ steps.create-release.outputs.result }}
       tag_name: ${{ steps.set-tag.outputs.tag }}
+      is_prerelease: ${{ steps.set-tag.outputs.prerelease }}
 
     steps:
       - name: Set tag name
@@ -23,8 +24,20 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
             echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
+            if [ -n "${{ github.event.client_payload.prerelease }}" ]; then
+              echo "prerelease=${{ github.event.client_payload.prerelease }}" >> $GITHUB_OUTPUT
+            elif [[ "${{ github.event.client_payload.tag }}" == *-* ]]; then
+              echo "prerelease=true" >> $GITHUB_OUTPUT
+            else
+              echo "prerelease=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            if [[ "${{ github.ref_name }}" == *-* ]]; then
+              echo "prerelease=true" >> $GITHUB_OUTPUT
+            else
+              echo "prerelease=false" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - uses: actions/checkout@v4
@@ -101,6 +114,7 @@ jobs:
           echo "Download the installer for your platform from the assets below:" >> /tmp/release_notes.md
           echo "" >> /tmp/release_notes.md
           echo "- **Windows**: \`simple-media-overlay_${CURRENT_TAG#v}_x64_en-US.msi\`" >> /tmp/release_notes.md
+          echo "- **Linux**: \`simple-media-overlay_${CURRENT_TAG#v}_amd64.AppImage\`" >> /tmp/release_notes.md
           echo "" >> /tmp/release_notes.md
           echo "If you already have Simple Media Overlay installed, the app will automatically update to this version when you restart it! 🚀" >> /tmp/release_notes.md
           echo "" >> /tmp/release_notes.md
@@ -118,6 +132,7 @@ jobs:
           script: |
             const fs = require('fs');
             const releaseNotes = fs.readFileSync('/tmp/release_notes.md', 'utf8');
+            const isPrerelease = '${{ steps.set-tag.outputs.prerelease }}' === 'true';
             
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
@@ -126,7 +141,7 @@ jobs:
               name: '${{ steps.set-tag.outputs.tag }}',
               body: releaseNotes,
               draft: false,
-              prerelease: false
+              prerelease: isPrerelease
             });
             return data.id;
 
@@ -139,6 +154,8 @@ jobs:
       matrix:
         include:
           - platform: 'windows-latest'
+            args: ''
+          - platform: 'ubuntu-latest'
             args: ''
 
     runs-on: ${{ matrix.platform }}
@@ -153,13 +170,24 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build the app with signing
         env:
@@ -167,7 +195,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- ${{ matrix.args }}
 
-      - name: Upload MSI to release
+      - name: Upload Windows bundle to release
+        if: matrix.platform == 'windows-latest'
         run: |
           $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
           $msiPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi"
@@ -176,7 +205,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Upload MSI signature to release
+      - name: Upload Windows signature to release
+        if: matrix.platform == 'windows-latest'
         run: |
           $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
           $sigPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi.sig"
@@ -189,7 +219,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create and upload updater JSON
+      - name: Upload Linux bundle and signature to release
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          APPIMAGE_PATH=$(find src-tauri/target/release/bundle -type f -name "*.AppImage" | head -n 1)
+          if [ -z "$APPIMAGE_PATH" ]; then
+            echo "ERROR: No AppImage artifact found"
+            find src-tauri/target/release/bundle -maxdepth 4 -type f || true
+            exit 1
+          fi
+
+          SIG_PATH="${APPIMAGE_PATH}.sig"
+          if [ ! -f "$SIG_PATH" ]; then
+            echo "ERROR: Signature file not found for AppImage at $SIG_PATH"
+            find src-tauri/target -type f -name "*.sig" || true
+            exit 1
+          fi
+
+          gh release upload ${{ needs.create-release.outputs.tag_name }} "$APPIMAGE_PATH" --clobber
+          gh release upload ${{ needs.create-release.outputs.tag_name }} "$SIG_PATH" --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create updater metadata fragment (Windows)
+        if: matrix.platform == 'windows-latest'
         run: |
           $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
           $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.tag_name }}/simple-media-overlay_${version}_x64_en-US.msi"
@@ -200,17 +253,12 @@ jobs:
           if (Test-Path $sigPath) {
             Write-Host "Found signature file!"
             $signature = Get-Content $sigPath -Raw
-            
+
             $json = @{
+              platform = "windows-x86_64"
               version = $version
-              notes = "See release notes for details"
-              pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-              platforms = @{
-                "windows-x86_64" = @{
-                  signature = $signature.Trim()
-                  url = $msiUrl
-                }
-              }
+              url = $msiUrl
+              signature = $signature.Trim()
             } | ConvertTo-Json -Depth 10
           } else {
             Write-Host "ERROR: Signature file not found!"
@@ -219,14 +267,84 @@ jobs:
             Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "*.sig" -ErrorAction SilentlyContinue
             exit 1
           }
-          
-          $json | Out-File -FilePath "latest.json" -Encoding utf8
-          
-          Write-Host "Created latest.json:"
-          Get-Content "latest.json"
-          
-          # Upload to release using GitHub CLI
-          gh release upload ${{ needs.create-release.outputs.tag_name }} latest.json --clobber
+
+          $json | Out-File -FilePath "updater-metadata-windows.json" -Encoding utf8
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create updater metadata fragment (Linux)
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          VERSION="${{ needs.create-release.outputs.tag_name }}"
+          VERSION="${VERSION#v}"
+
+          APPIMAGE_PATH=$(find src-tauri/target/release/bundle -type f -name "*.AppImage" | head -n 1)
+          if [ -z "$APPIMAGE_PATH" ]; then
+            echo "ERROR: No AppImage artifact found"
+            exit 1
+          fi
+
+          SIG_PATH="${APPIMAGE_PATH}.sig"
+          if [ ! -f "$SIG_PATH" ]; then
+            echo "ERROR: Signature file not found for AppImage at $SIG_PATH"
+            exit 1
+          fi
+
+          APPIMAGE_NAME=$(basename "$APPIMAGE_PATH")
+          APPIMAGE_URL="https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.tag_name }}/${APPIMAGE_NAME}"
+          SIGNATURE=$(cat "$SIG_PATH")
+
+          jq -n \
+            --arg platform "linux-x86_64" \
+            --arg version "$VERSION" \
+            --arg url "$APPIMAGE_URL" \
+            --arg signature "${SIGNATURE}" \
+            '{ platform: $platform, version: $version, url: $url, signature: ($signature | gsub("\\n$"; "")) }' \
+            > updater-metadata-linux.json
+
+      - name: Upload updater metadata fragment
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-metadata-${{ matrix.platform }}
+          path: updater-metadata-*.json
+
+  publish-updater-json:
+    needs: [create-release, build-tauri]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download updater metadata fragments
+        uses: actions/download-artifact@v4
+        with:
+          path: updater-metadata
+          pattern: updater-metadata-*
+          merge-multiple: true
+
+      - name: Create latest.json from platform metadata
+        run: |
+          VERSION="${{ needs.create-release.outputs.tag_name }}"
+          VERSION="${VERSION#v}"
+
+          if ! compgen -G "updater-metadata/*.json" > /dev/null; then
+            echo "ERROR: No updater metadata fragments found"
+            exit 1
+          fi
+
+          PLATFORMS_JSON=$(jq -s 'map({(.platform): { signature: .signature, url: .url }}) | add' updater-metadata/*.json)
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notes "See release notes for details" \
+            --argjson platforms "$PLATFORMS_JSON" \
+            '{ version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms }' \
+            > latest.json
+
+          cat latest.json
+
+      - name: Upload latest.json to release
+        run: gh release upload ${{ needs.create-release.outputs.tag_name }} latest.json --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -10,9 +10,9 @@ interface MediaControlsProps {
   isShuffle: boolean;
   repeatMode: RepeatMode;
   sourceAppId: string | null;
-  pinned: boolean;
   playPauseImpact?: boolean;
   playbackLoading?: boolean;
+  onControlPress?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onPlayPause: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onPrevious: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onNext: (e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -25,9 +25,9 @@ export function MediaControls({
   isShuffle,
   repeatMode,
   sourceAppId,
-  pinned,
   playPauseImpact = false,
   playbackLoading = false,
+  onControlPress,
   onPlayPause,
   onPrevious,
   onNext,
@@ -49,8 +49,8 @@ export function MediaControls({
   return (
     <div
       className="flex items-center gap-3 mt-3 justify-center"
+      data-no-drag
       style={{
-        WebkitAppRegion: pinned ? 'no-drag' : 'drag',
         userSelect: 'none',
       } as never}
     >
@@ -62,9 +62,10 @@ export function MediaControls({
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
           }
+          onMouseDown={onControlPress}
           onClick={onRepeat}
           id="repeat-button"
-          style={{ WebkitAppRegion: 'no-drag' } as never}
+          data-no-drag
           title="Repeat Mode"
         >
           {getRepeatIcon()}
@@ -73,8 +74,9 @@ export function MediaControls({
       <button
         className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="back-button"
+        onMouseDown={onControlPress}
         onClick={onPrevious}
-        style={{ WebkitAppRegion: 'no-drag' } as never}
+        data-no-drag
         title="Previous"
       >
         <SkipBack />
@@ -82,8 +84,9 @@ export function MediaControls({
       <button
         className={`px-3 py-1 rounded-full font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''} ${isPlaying ? 'bg-white text-xs text-black hover:bg-white/80' : 'bg-white/10 text-white hover:bg-white/20'}`}
         id="play-pause-button"
+        onMouseDown={onControlPress}
         onClick={onPlayPause}
-        style={{ WebkitAppRegion: 'no-drag' } as never}
+        data-no-drag
         title={isPlaying ? 'Pause' : 'Play'}
       >
         {playbackLoading ? <Loader2 className="animate-spin" /> : isPlaying ? <Pause /> : <Play />}
@@ -91,8 +94,9 @@ export function MediaControls({
       <button
         className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
         id="next-button"
+        onMouseDown={onControlPress}
         onClick={onNext}
-        style={{ WebkitAppRegion: 'no-drag' } as never}
+        data-no-drag
         title="Next"
       >
         <SkipForward />
@@ -105,9 +109,10 @@ export function MediaControls({
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
           }
+          onMouseDown={onControlPress}
           onClick={onShuffle}
           id="shuffle-button"
-          style={{ WebkitAppRegion: 'no-drag' } as never}
+          data-no-drag
           title="Shuffle"
         >
           <Shuffle />
