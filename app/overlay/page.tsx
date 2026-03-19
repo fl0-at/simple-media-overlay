@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
-import { LogicalSize, getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useEffect, useState, useRef, MouseEvent, useMemo } from 'react';
 import { useMediaInfo } from '@/app/hooks/useMediaInfo';
@@ -407,10 +407,6 @@ export default function OverlayPage() {
 
     window.setAlwaysOnTop(true).catch((e) => {
       console.warn('setAlwaysOnTop failed', e);
-    });
-
-    window.setSize(new LogicalSize(408, 128)).catch((e) => {
-      console.warn('setSize failed', e);
     });
 
     window.setShadow(false).catch(() => {

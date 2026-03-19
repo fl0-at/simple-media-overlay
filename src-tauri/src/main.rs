@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(target_os = "windows")]
 use gsmtc::{ManagerEvent, SessionManager, SessionUpdateEvent};
@@ -136,6 +136,7 @@ fn map_repeat_mode_enum(mode: LoopStatus) -> RepeatMode {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn normalize_source_app_id(source_app_id: Option<&str>) -> String {
     let Some(source_app_id) = source_app_id else {
         return String::new();
@@ -803,6 +804,10 @@ struct MediaState {
     // Track the last title we successfully cached a thumbnail for (to detect stale fetches)
     #[cfg(target_os = "windows")]
     last_cached_title: Mutex<Option<String>>,
+    // Last known non-empty thumbnail, used to detect one-track-behind stale art
+    // even when intermediate snapshots intentionally emit without image.
+    #[cfg(target_os = "windows")]
+    last_non_empty_thumbnail: Mutex<Option<String>>,
     // Cache of lyrics keyed by (artist|title)
     lyrics_cache: StdMutex<HashMap<String, LyricsResponse>>,
     // Prevent duplicate listener loops when frontend re-invokes start_media_listener.
@@ -1051,13 +1056,10 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
             }
         };
 
-        // Extract previous thumbnail and last cached title before calling snapshot_from_session
-        let prev_thumbnail = {
-            let snapshot_guard = state.snapshot.lock().await;
-            snapshot_guard
-                .as_ref()
-                .and_then(|s| s.props.album_image.clone())
-        };
+        // Extract previous thumbnail and last cached title before calling snapshot_from_session.
+        // Use a persistent non-empty thumbnail marker rather than snapshot image,
+        // because snapshot image may be intentionally None during stale-art suppression.
+        let prev_thumbnail = state.last_non_empty_thumbnail.lock().await.clone();
         let last_cached_title = state.last_cached_title.lock().await.clone();
 
         let snap = match snapshot_from_session(
@@ -1125,6 +1127,11 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
 
         // Check playing status before snap is moved
         let is_playing = snap.is_playing;
+
+        if let Some(image) = snap.props.album_image.clone() {
+            let mut last_thumb_guard = state.last_non_empty_thumbnail.lock().await;
+            *last_thumb_guard = Some(image);
+        }
 
         if should_emit {
             // Always update last_cached_title to current track title
@@ -1641,17 +1648,14 @@ async fn refresh_media_snapshot(
         }
     };
 
-    // Get previous snapshot data to preserve thumbnail cache and title
-    let (prev_thumbnail, prev_title) = {
+    // Get previous data for stale-art detection and title comparison.
+    // Keep stale-art thumbnail source independent from snapshot image.
+    let prev_thumbnail = state.last_non_empty_thumbnail.lock().await.clone();
+    let prev_title = {
         let snapshot_guard = state.snapshot.lock().await;
-        if let Some(ref prev_snap) = *snapshot_guard {
-            (
-                prev_snap.props.album_image.clone(),
-                Some(prev_snap.props.title.clone()),
-            )
-        } else {
-            (None, None)
-        }
+        snapshot_guard
+            .as_ref()
+            .map(|prev_snap| prev_snap.props.title.clone())
     };
 
     let snap = snapshot_from_session(
@@ -1664,6 +1668,11 @@ async fn refresh_media_snapshot(
     let mut snapshot_guard = state.snapshot.lock().await;
     *snapshot_guard = Some(snap.clone());
     drop(snapshot_guard);
+
+    if let Some(image) = snap.props.album_image.clone() {
+        let mut last_thumb_guard = state.last_non_empty_thumbnail.lock().await;
+        *last_thumb_guard = Some(image);
+    }
 
     let mut props_guard = state.props.lock().await;
     *props_guard = Some(snap.props.clone());

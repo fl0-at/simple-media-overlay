@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, emit } from '@tauri-apps/api/event';
-import { LogicalSize, getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState, MouseEvent, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { WindowControls } from '../WindowControls';
@@ -354,10 +354,6 @@ export default function LyricsPage() {
 
     window.setAlwaysOnTop(true).catch((e: unknown) => {
       console.error('lyrics setAlwaysOnTop failed', e);
-    });
-
-    window.setSize(new LogicalSize(408, 160)).catch((e: unknown) => {
-      console.error('lyrics setSize failed', e);
     });
 
     window.setShadow(false).catch(() => {
