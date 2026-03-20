@@ -1,6 +1,6 @@
 [package]
 name = "simple-media-overlay"
-version = "1.0.7-2"
+version = "1.0.7-3"
 description = "A simple media overlay that also lets you control media playback"
 authors = ["Florian Löffler"]
 license = "MIT"
