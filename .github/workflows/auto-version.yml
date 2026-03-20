@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     
     steps:
       - uses: actions/checkout@v4
@@ -146,7 +147,7 @@ jobs:
         if: steps.bump-type.outputs.skip != 'true'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             await github.rest.repos.createDispatchEvent({
               owner: context.repo.owner,
