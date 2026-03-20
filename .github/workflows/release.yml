@@ -170,6 +170,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.create-release.outputs.tag_name }}
+          fetch-tags: true
 
       - name: Setup Node
         uses: actions/setup-node@v4
