@@ -45,7 +45,24 @@ jobs:
         id: bump-type
         run: |
           # Check commit message for version bump indicators
+          BRANCH_NAME="${{ github.ref_name }}"
           COMMIT_MSG=$(git log -1 --pretty=%B)
+
+          if [ "$BRANCH_NAME" == "develop" ]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+
+            if [[ "$COMMIT_MSG" =~ ^major: ]] || [[ "$COMMIT_MSG" =~ \[major\] ]] || [[ "$COMMIT_MSG" =~ BREAKING\ CHANGE ]]; then
+              echo "type=major" >> $GITHUB_OUTPUT
+            elif [[ "$COMMIT_MSG" =~ ^minor: ]] || [[ "$COMMIT_MSG" =~ \[minor\] ]]; then
+              echo "type=minor" >> $GITHUB_OUTPUT
+            elif [[ "$COMMIT_MSG" =~ ^patch: ]]; then
+              echo "type=patch" >> $GITHUB_OUTPUT
+            else
+              echo "type=build" >> $GITHUB_OUTPUT
+            fi
+
+            exit 0
+          fi
           
           # Skip version bump for non-versioned commits
           if [[ "$COMMIT_MSG" =~ ^chore: ]] || \
@@ -73,22 +90,26 @@ jobs:
         id: bump
         run: |
           BRANCH_NAME="${{ github.ref_name }}"
+          BUMP_TYPE="${{ steps.bump-type.outputs.type }}"
           IFS='.' read -r major minor patch <<< "${{ steps.get-version.outputs.base_version }}"
-          
-          if [ "${{ steps.bump-type.outputs.type }}" == "major" ]; then
-            major=$((major + 1))
-            minor=0
-            patch=0
-          elif [ "${{ steps.bump-type.outputs.type }}" == "minor" ]; then
-            minor=$((minor + 1))
-            patch=0
-          else
-            patch=$((patch + 1))
-          fi
-          
-          NEW_BASE_VERSION="$major.$minor.$patch"
 
           if [ "$BRANCH_NAME" == "develop" ]; then
+            NEW_BASE_VERSION="${{ steps.get-version.outputs.base_version }}"
+
+            if [ "$BUMP_TYPE" == "major" ]; then
+              major=$((major + 1))
+              minor=0
+              patch=0
+              NEW_BASE_VERSION="$major.$minor.$patch"
+            elif [ "$BUMP_TYPE" == "minor" ]; then
+              minor=$((minor + 1))
+              patch=0
+              NEW_BASE_VERSION="$major.$minor.$patch"
+            elif [ "$BUMP_TYPE" == "patch" ]; then
+              patch=$((patch + 1))
+              NEW_BASE_VERSION="$major.$minor.$patch"
+            fi
+
             LAST_DEV_TAG=$(git tag -l "v${NEW_BASE_VERSION}-[0-9]*" --sort=-version:refname | head -n 1)
 
             if [ -n "$LAST_DEV_TAG" ]; then
@@ -106,13 +127,25 @@ jobs:
             NEW_VERSION="${NEW_BASE_VERSION}-${NEXT_DEV_NUMBER}"
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
           else
+            if [ "$BUMP_TYPE" == "major" ]; then
+              major=$((major + 1))
+              minor=0
+              patch=0
+            elif [ "$BUMP_TYPE" == "minor" ]; then
+              minor=$((minor + 1))
+              patch=0
+            else
+              patch=$((patch + 1))
+            fi
+
+            NEW_BASE_VERSION="$major.$minor.$patch"
             NEW_VERSION="$NEW_BASE_VERSION"
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
           fi
           
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "bump_type=${{ steps.bump-type.outputs.type }}" >> $GITHUB_OUTPUT
-          echo "New ${{ steps.bump-type.outputs.type }} version: $NEW_VERSION"
+          echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+          echo "New $BUMP_TYPE version: $NEW_VERSION"
 
       - name: Update package.json
         if: steps.bump-type.outputs.skip != 'true'
