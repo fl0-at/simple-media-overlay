@@ -358,6 +358,6 @@ jobs:
           cat latest.json
 
       - name: Upload latest.json to release
-        run: gh release upload ${{ needs.create-release.outputs.tag_name }} latest.json --clobber
+        run: gh release upload ${{ needs.create-release.outputs.tag_name }} latest.json --clobber -R ${{ github.repository }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
