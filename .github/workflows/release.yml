@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [release-requested]
 
 jobs:
   create-release:
@@ -19,8 +22,13 @@ jobs:
       - name: Set tag name
         id: set-tag
         run: |
-          echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          if [[ "${{ github.ref_name }}" == *-* ]]; then
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            TAG="${{ github.event.client_payload.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          if [[ "$TAG" == *-* ]]; then
             echo "prerelease=true" >> $GITHUB_OUTPUT
           else
             echo "prerelease=false" >> $GITHUB_OUTPUT
