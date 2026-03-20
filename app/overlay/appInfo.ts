@@ -22,7 +22,12 @@ export function normalizeAppId(sourceAppId: string | null | undefined): string {
   const beforeBang = lower.includes('!') ? lower.split('!')[0] : lower;
   // Remove any trailing store/package id after an underscore
   const beforeUnderscore = beforeBang.split('_')[0];
-  return beforeUnderscore;
+  // Browsers can expose volatile MPRIS instance suffixes (e.g. chromium.instance12345).
+  // Strip those so same-app snapshots remain stable across track changes.
+  const withoutInstance = beforeUnderscore.split('.instance')[0];
+  return withoutInstance.endsWith('.desktop')
+    ? withoutInstance.slice(0, -'.desktop'.length)
+    : withoutInstance;
 }
 
 /**
@@ -32,6 +37,7 @@ export function normalizeAppId(sourceAppId: string | null | undefined): string {
 export const blockedAppsForPlaybackModes = [
     'tidal', 
     'chrome',
+    'chromium',
     '308046b0af4a39cb', // Firefox
     'brave',
     'edge',
@@ -70,6 +76,7 @@ export function getPlayerInfo(sourceAppId: string | null): PlayerInfo {
   // browsers
   if (id.includes('brave')) return { name: 'Brave Browser', imageSrc: '/Brave.png' };
   if (id.includes('chrome')) return { name: 'Chrome', imageSrc: '/Chrome.svg' };
+  if (id.includes('chromium')) return { name: 'Chromium', imageSrc: '/Chromium.svg' };
   if (id.includes('edge')) return { name: 'Edge', imageSrc: '/Edge.svg' };
   if (id.includes('firefox') || id === '308046b0af4a39cb') return { name: 'Firefox', imageSrc: '/Firefox.svg' };
   if (id.includes('opera')) return { name: 'Opera', imageSrc: '/Opera.svg' };

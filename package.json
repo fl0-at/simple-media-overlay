@@ -1,6 +1,6 @@
 {
   "name": "simple-media-overlay",
-  "version": "0.11.5",
+  "version": "1.0.5",
   "private": true,
   "scripts": {
     "dev": "next dev",

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "simple-media-overlay",
-  "version": "0.11.5",
+  "version": "1.0.5",
   "identifier": "app.simple-media-overlay.dev",
   "build": {
     "frontendDist": "../out",
@@ -16,6 +16,10 @@
         "title": "Simple Media Overlay",
         "width": 128,
         "height": 128,
+        "minWidth": 128,
+        "minHeight": 128,
+        "maxWidth": 128,
+        "maxHeight": 128,
         "center": true,
         "resizable": false,
         "decorations": false,
@@ -35,6 +39,10 @@
         "visible": false,
         "width": 408,
         "height": 128,
+        "minWidth": 408,
+        "minHeight": 128,
+        "maxWidth": 408,
+        "maxHeight": 128,
         "center": true
       }
     ],

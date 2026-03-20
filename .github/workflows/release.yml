@@ -141,8 +141,7 @@ jobs:
           script: |
             const fs = require('fs');
             const releaseNotes = fs.readFileSync('/tmp/release_notes.md', 'utf8');
-            const tagName = '${{ steps.set-tag.outputs.tag }}';
-            const isPrerelease = /-/.test(tagName);
+            
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,

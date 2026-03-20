@@ -14,8 +14,8 @@ export function MediaTimeline({ hasTimeline, progress, onProgressClick }: MediaT
   return (
     <div
       className="mt-2 w-full h-1.5 bg-white/15 rounded-full cursor-pointer"
+      data-no-drag
       style={{
-        WebkitAppRegion: 'no-drag',
         userSelect: 'none',
         visibility: visible ? 'visible' : 'hidden',
         pointerEvents: visible ? 'auto' : 'none',
@@ -24,8 +24,11 @@ export function MediaTimeline({ hasTimeline, progress, onProgressClick }: MediaT
       aria-hidden={!visible}
     >
       <div
-        className="h-full bg-white rounded-full transition-all duration-75 ease-linear"
-        style={{ width: `${progress * 100}%` }}
+        className="h-full bg-white rounded-full origin-left"
+        style={{
+          transform: `scaleX(${Math.min(1, Math.max(0, progress))})`,
+          transition: 'transform 33ms linear',
+        }}
       />
     </div>
   );
