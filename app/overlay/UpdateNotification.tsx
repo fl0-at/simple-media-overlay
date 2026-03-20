@@ -105,7 +105,7 @@ export default function UpdateNotification({ onDismiss }: UpdateNotificationProp
       <div className="fixed top-4 right-4 bg-red-500/90 text-white px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm max-w-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="font-semibold">Update Error</p>
+            <p className="font-semibold">❌ Update Error!</p>
             <p className="text-sm opacity-90">{error}</p>
           </div>
           <button
