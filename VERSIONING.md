@@ -80,7 +80,7 @@ git commit -m "perf: optimize media timeline rendering"
    - Bumps version in `package.json`, `tauri.conf.json`, and `Cargo.toml`
    - Creates a git tag:
      - stable: `v0.4.0`
-       - develop prerelease: `v0.4.0-1`
+     - develop prerelease: `v0.4.0-1`
    - Pushes the tag
 
 4. **Release build**:
