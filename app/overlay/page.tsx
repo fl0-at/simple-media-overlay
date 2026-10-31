@@ -13,12 +13,13 @@ import { MediaControls } from './MediaControls';
 import { WindowControls } from '../WindowControls';
 import UpdateNotification from './UpdateNotification';
 import { StyledImage } from '../StyledImage';
-import { getPlayerInfo, normalizeAppId } from './appInfo';
+import { getPlayerInfo, isPlaybackModeSupported, normalizeAppId } from './appInfo';
+import { anchorSnapshot, computePlaybackPosition, type AnchoredSnapshot } from './timeline';
 import { ListMusic, Loader2 } from 'lucide-react';
 
 type RepeatMode = 'none' | 'track' | 'list';
 
-type MediaSnapshotDto = {
+type BackendMediaSnapshot = {
   props: {
     title: string;
     artist: string;
@@ -27,11 +28,16 @@ type MediaSnapshotDto = {
   };
   is_playing: boolean;
   position_ms?: number | null;
+  position_updated_at_ms?: number | null;
   duration_ms?: number | null;
+  playback_rate?: number | null;
   is_shuffle?: boolean | null;
   repeat_mode?: RepeatMode | null;
   source_app_id?: string | null;
 };
+
+// Snapshot whose position is anchored to wall-clock time for local extrapolation.
+type MediaSnapshotDto = AnchoredSnapshot<BackendMediaSnapshot>;
 
 async function sendControl(action: 'playPause' | 'next' | 'previous', setDirection?: (dir: 'next' | 'previous' | null) => void, setFading?: (fading: boolean) => void) {
   try {
@@ -87,7 +93,7 @@ async function sendSeek(positionMs: number) {
 }
 
 export default function OverlayPage() {
-  const media = useMediaInfo();
+  const { media, isLoading: isMediaLoading } = useMediaInfo();
 
   const [snapshot, setSnapshot] = useState<MediaSnapshotDto | null>(null);
   const currentSnapshotRef = useRef<MediaSnapshotDto | null>(null);
@@ -95,7 +101,7 @@ export default function OverlayPage() {
   const pendingAppSwitchSourceRef = useRef<string | null>(null);
   const pendingAppSwitchSourceHitsRef = useRef(0);
   const appSwitchingRef = useRef<boolean>(false);
-  const [playElapsedMs, setPlayElapsedMs] = useState(0);
+  const [clockMs, setClockMs] = useState(() => Date.now());
   const [pinned, setPinned] = useState(false);
   const dragRegionProps = pinned ? {} : { 'data-tauri-drag-region': '' };
   const [lyricsOverlayOpen, setLyricsOverlayOpen] = useState(false);
@@ -176,30 +182,21 @@ export default function OverlayPage() {
       lyricsCloseUnlisten = u;
     });
 
-    listen<MediaSnapshotDto>('media_snapshot', (event) => {
-      let nextPayload = event.payload;
+    listen<BackendMediaSnapshot>('media_snapshot', (event) => {
+      const isFirstSnapshot = !currentSnapshotRef.current;
+      // Anchor against the newest known snapshot of the same source so repeated or
+      // stale timelines continue smoothly instead of jumping.
+      const anchorBase =
+        pendingSnapshotRef.current &&
+        normalizeAppId(pendingSnapshotRef.current.source_app_id ?? null) ===
+          normalizeAppId(event.payload.source_app_id ?? null)
+          ? pendingSnapshotRef.current
+          : currentSnapshotRef.current;
+      const nextPayload: MediaSnapshotDto = anchorSnapshot(event.payload, anchorBase, Date.now());
       const newSourceAppId = event.payload.source_app_id ?? null;
       const currentSourceAppId = currentSnapshotRef.current?.source_app_id ?? null;
       const normalizedNewSourceAppId = normalizeAppId(newSourceAppId);
       const normalizedCurrentSourceAppId = normalizeAppId(currentSourceAppId);
-
-      const previous = currentSnapshotRef.current;
-      const trackChanged =
-        !!previous &&
-        previous.source_app_id === event.payload.source_app_id &&
-        (previous.props.title !== event.payload.props.title ||
-          previous.props.artist !== event.payload.props.artist ||
-          previous.props.album_title !== event.payload.props.album_title);
-
-      // Some players briefly report stale position from the previous song on natural
-      // track transitions. Prevent temporary 100% progress and backward rewinds.
-      if (trackChanged && event.payload.is_playing && event.payload.duration_ms && event.payload.duration_ms > 0) {
-        const reportedPosition = event.payload.position_ms ?? 0;
-        const ratio = reportedPosition / event.payload.duration_ms;
-        if (reportedPosition > 0 && ratio > 0.35) {
-          nextPayload = { ...event.payload, position_ms: 0 };
-        }
-      }
 
       if (appSwitchingRef.current && pendingSnapshotRef.current) {
         const pendingSourceAppId = normalizeAppId(
@@ -360,16 +357,16 @@ export default function OverlayPage() {
           artist: nextPayload.props.artist,
           albumTitle: nextPayload.props.album_title,
           durationMs: nextPayload.duration_ms,
-          positionMs: nextPayload.position_ms,
+          positionMs: computePlaybackPosition(nextPayload, Date.now()),
         });
 
         // If this is the first snapshot and position seems incorrect (null or 0) while playing,
         // request a refresh after a short delay to get accurate position
-        if (!currentSnapshotRef.current &&
+        if (isFirstSnapshot &&
           nextPayload.is_playing &&
           nextPayload.duration_ms &&
           nextPayload.duration_ms > 0 &&
-          (!nextPayload.position_ms || nextPayload.position_ms === 0)) {
+          !computePlaybackPosition(nextPayload, Date.now())) {
           setTimeout(() => {
             invoke('refresh_media_snapshot').catch(() => { });
           }, 200);
@@ -438,40 +435,41 @@ export default function OverlayPage() {
   }, []);
 
   useEffect(() => {
-    if (!snapshot?.is_playing || !snapshot?.duration_ms || snapshot.duration_ms <= 0) {
+    if (!snapshot) return;
+
+    // Keep the lyrics window in sync even while paused or after a seek.
+    const emitPosition = (now: number) => {
+      const positionMs = computePlaybackPosition(snapshot, now);
+      if (positionMs != null) {
+        emit('playback-position', { positionMs });
+      }
+    };
+
+    emitPosition(Date.now());
+
+    if (!snapshot.is_playing || !snapshot.duration_ms || snapshot.duration_ms <= 0) {
       return;
     }
 
-    // Re-anchor to the backend-reported position whenever playback state/position changes.
-    // This prevents local elapsed accumulation from drifting across snapshot updates.
-    setPlayElapsedMs(0);
-
     let frameId: number;
-    let last = performance.now();
-    let lastPaintTime = 0;
-    const durationMs = snapshot.duration_ms;
-    const positionMs = snapshot.position_ms ?? 0;
-    let lastEmitTime = 0;
-    let elapsedMs = 0;
+    let lastPaintTime = -Infinity;
+    let lastEmitTime = performance.now();
     const paintIntervalMs = 33;
 
-    const tick = (now: number) => {
-      const deltaMs = now - last;
-      last = now;
-
-      const maxElapsed = Math.max(0, durationMs - positionMs);
-      elapsedMs = Math.min(elapsedMs + deltaMs, maxElapsed);
+    // Position is derived from wall-clock time, so frames throttled while the window is
+    // hidden or a dev reload don't cause drift.
+    const tick = (frameTime: number) => {
+      const now = Date.now();
 
       // Throttle React state updates for smoother, less jittery rendering under load.
-      if (now - lastPaintTime >= paintIntervalMs || elapsedMs >= maxElapsed) {
-        setPlayElapsedMs(elapsedMs);
-        lastPaintTime = now;
+      if (frameTime - lastPaintTime >= paintIntervalMs) {
+        setClockMs(now);
+        lastPaintTime = frameTime;
       }
 
-      // Emit position update to lyrics window every 100ms
-      if (now - lastEmitTime >= 100) {
-        emit('playback-position', { positionMs: positionMs + elapsedMs });
-        lastEmitTime = now;
+      if (frameTime - lastEmitTime >= 100) {
+        emitPosition(now);
+        lastEmitTime = frameTime;
       }
 
       frameId = requestAnimationFrame(tick);
@@ -482,7 +480,7 @@ export default function OverlayPage() {
     return () => {
       cancelAnimationFrame(frameId);
     };
-  }, [snapshot?.is_playing, snapshot?.duration_ms, snapshot?.position_ms]);
+  }, [snapshot]);
 
   const sourceAppId = snapshot?.source_app_id ?? null;
 
@@ -608,8 +606,6 @@ export default function OverlayPage() {
       trackAnimationTimeoutRef.current = window.setTimeout(() => {
         setIsAnimating(false);
         setTrackChangeDirection(null); // Clear direction after animation
-        // Reset playElapsedMs after animation to sync with new track
-        setPlayElapsedMs(0);
         trackAnimationTimeoutRef.current = null;
       }, 350); // Slightly longer than animation duration to ensure completion
 
@@ -670,7 +666,6 @@ export default function OverlayPage() {
         setIsAnimating(false);
         setAppSwitchAnimating(false);
         setAppSwitchDirection(null);
-        setPlayElapsedMs(0);
         pendingSnapshotRef.current = null; // Clear it here after full animation
         pendingAppSwitchSourceRef.current = null;
         pendingAppSwitchSourceHitsRef.current = 0;
@@ -1302,20 +1297,11 @@ export default function OverlayPage() {
   // Image key changes whenever track changes, forcing re-render
 
   const durationMs = snapshot?.duration_ms ?? null;
-  const rawBasePositionMs = snapshot?.position_ms ?? null;
-  const basePositionMs =
-    rawBasePositionMs != null
-      ? Math.max(0, Math.min(rawBasePositionMs, durationMs ?? rawBasePositionMs))
-      : null;
 
   const isPlaying = snapshot?.is_playing ?? false;
   const isShuffle = snapshot?.is_shuffle ?? false;
 
-  let effectivePositionMs = basePositionMs ?? 0;
-  if (isPlaying && basePositionMs != null) {
-    const advanced = basePositionMs + playElapsedMs;
-    effectivePositionMs = Math.min(durationMs || Infinity, advanced);
-  }
+  const effectivePositionMs = computePlaybackPosition(snapshot, clockMs) ?? 0;
 
   const hasTimeline = durationMs && durationMs > 0;
 
@@ -1658,6 +1644,57 @@ export default function OverlayPage() {
                     sendPlaybackMode('repeat', next);
                   }}
                 />
+              </div>
+            </div>
+          </div>
+        ) : isMediaLoading ? (
+          <div
+            className="relative z-10 flex h-full w-full items-center gap-3 px-3 py-2.5"
+            role="status"
+            aria-label="Loading media"
+            aria-busy="true"
+          >
+            <div className="relative flex h-full w-28 shrink-0 items-center justify-center" {...dragRegionProps}>
+              <div className="h-26 w-26 shrink-0 animate-pulse rounded-lg bg-white/10" />
+              <div
+                className="absolute -bottom-[calc(0.5vh_+_4px)] -left-[1.5vw] h-10 w-10 animate-pulse rounded bg-white/10"
+                aria-hidden="true"
+              />
+              <div
+                className="absolute -bottom-[0.5vh] -right-[1.5vw] h-8 w-8 animate-pulse rounded-full bg-white/15"
+                aria-hidden="true"
+              />
+            </div>
+            <div
+              className="flex min-w-0 flex-1 flex-col justify-between"
+              style={{ minHeight: '100%' } as never}
+              {...dragRegionProps}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 flex-1 flex-col gap-2 pt-1" aria-hidden="true">
+                  <div className="h-4 w-3/4 animate-pulse rounded bg-white/15" />
+                  <div className="h-3 w-1/2 animate-pulse rounded bg-white/10" />
+                </div>
+                <WindowControls pinned={pinned} onPinPress={handlePinPress} onPinToggle={handlePinToggle} />
+              </div>
+              <div>
+                <div className="mt-2 h-1.5 w-full animate-pulse rounded-full bg-white/10" aria-hidden="true" />
+              </div>
+              <div className="mt-0">
+                <div
+                  className="mt-3 flex items-center justify-center gap-3"
+                  aria-hidden="true"
+                >
+                  {isPlaybackModeSupported(sourceAppId) && (
+                    <div className="h-8 w-10 animate-pulse rounded-full bg-white/10" />
+                  )}
+                  <div className="h-8 w-10 animate-pulse rounded-full bg-white/10" />
+                  <div className="h-8 w-12 animate-pulse rounded-full bg-white/15" />
+                  <div className="h-8 w-10 animate-pulse rounded-full bg-white/10" />
+                  {isPlaybackModeSupported(sourceAppId) && (
+                    <div className="h-8 w-10 animate-pulse rounded-full bg-white/10" />
+                  )}
+                </div>
               </div>
             </div>
           </div>

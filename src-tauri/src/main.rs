@@ -452,7 +452,10 @@ fn snapshot_from_player(
         },
         is_playing,
         position_ms,
+        // MPRIS positions are computed live by the player at query time.
+        position_updated_at_ms: None,
         duration_ms,
+        playback_rate: None,
         is_shuffle,
         repeat_mode,
         source_app_id,
@@ -790,10 +793,28 @@ struct MediaSnapshotDto {
     props: MediaPropsDto,
     is_playing: bool,
     position_ms: Option<i64>,
+    // Unix epoch milliseconds at which `position_ms` was reported by the player.
+    // GSMTC positions are only refreshed occasionally (e.g. on play/pause/seek), so
+    // consumers must extrapolate from this timestamp. `None` means "fresh as of now".
+    position_updated_at_ms: Option<i64>,
     duration_ms: Option<i64>,
+    playback_rate: Option<f64>,
     is_shuffle: Option<bool>,
     repeat_mode: Option<RepeatMode>,
     source_app_id: Option<String>,
+}
+
+// 100 ns ticks between 1601-01-01 (Windows epoch) and 1970-01-01 (Unix epoch).
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_TO_UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_ticks_to_unix_ms(ticks: i64) -> Option<i64> {
+    // Players that never set LastUpdatedTime report 0 (or other pre-1970 values).
+    if ticks <= WINDOWS_TO_UNIX_EPOCH_TICKS {
+        return None;
+    }
+    Some((ticks - WINDOWS_TO_UNIX_EPOCH_TICKS) / 10_000)
 }
 
 #[derive(Debug, Default)]
@@ -880,7 +901,16 @@ fn snapshot_from_session(
     let album_title = media_props.AlbumTitle().ok().map(|s| s.to_string());
 
     let position_ms = timeline.Position().ok().map(|t| t.Duration / 10_000); // 100 ns -> ms
+    let position_updated_at_ms = timeline
+        .LastUpdatedTime()
+        .ok()
+        .and_then(|t| windows_ticks_to_unix_ms(t.UniversalTime));
     let duration_ms = timeline.EndTime().ok().map(|t| t.Duration / 10_000);
+    let playback_rate = playback_info
+        .PlaybackRate()
+        .ok()
+        .and_then(|r| r.Value().ok())
+        .filter(|rate| rate.is_finite() && *rate > 0.0);
 
     let is_playing = matches!(
         status,
@@ -1016,7 +1046,9 @@ fn snapshot_from_session(
         },
         is_playing,
         position_ms,
+        position_updated_at_ms,
         duration_ms,
+        playback_rate,
         is_shuffle,
         repeat_mode,
         source_app_id,
@@ -2003,5 +2035,26 @@ async fn check_for_updates(app: AppHandle) {
         None => {
             log::warn!("Updater not available");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_ticks_convert_to_unix_ms() {
+        assert_eq!(windows_ticks_to_unix_ms(WINDOWS_TO_UNIX_EPOCH_TICKS + 10_000), Some(1));
+        // 2023-11-14T22:13:20Z
+        assert_eq!(
+            windows_ticks_to_unix_ms(WINDOWS_TO_UNIX_EPOCH_TICKS + 1_700_000_000_000 * 10_000),
+            Some(1_700_000_000_000)
+        );
+    }
+
+    #[test]
+    fn unset_windows_ticks_are_ignored() {
+        assert_eq!(windows_ticks_to_unix_ms(0), None);
+        assert_eq!(windows_ticks_to_unix_ms(WINDOWS_TO_UNIX_EPOCH_TICKS), None);
     }
 }

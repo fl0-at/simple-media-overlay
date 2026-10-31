@@ -156,7 +156,7 @@ If that happens, you can still enable it manually through the desktop environmen
 
 **Timeline shows incorrect progress?**
 
-- This is currently a [known issue](https://github.com/fl0-at/simple-media-overlay/issues/4) that I am working on, so feel free to contribute if you spot the root cause of this problem
+- The overlay extrapolates progress from the position and timestamp the player last reported (GSMTC `LastUpdatedTime` on Windows, live MPRIS position on Linux), so it stays in sync when the overlay starts mid-track or reloads. If a specific player still shows wrong progress, it most likely reports an inaccurate timeline; please add details to the [tracking issue](https://github.com/fl0-at/simple-media-overlay/issues/4)
 
 **Media not showing up?**
 
