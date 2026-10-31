@@ -176,11 +176,6 @@ export default function OverlayPage() {
       lyricsCloseUnlisten = u;
     });
 
-    // Fetch initial snapshot on mount/refresh
-    invoke('refresh_media_snapshot').catch((e: unknown) =>
-      console.warn('refresh_media_snapshot failed on mount', e)
-    );
-
     listen<MediaSnapshotDto>('media_snapshot', (event) => {
       let nextPayload = event.payload;
       const newSourceAppId = event.payload.source_app_id ?? null;
@@ -382,6 +377,11 @@ export default function OverlayPage() {
       }
     }).then((u) => {
       unlisten = u;
+      invoke('refresh_media_snapshot').catch((e: unknown) =>
+        console.warn('refresh_media_snapshot failed on mount', e)
+      );
+    }).catch((e: unknown) => {
+      console.error('Failed to listen for media_snapshot', e);
     });
 
     return () => {
@@ -1226,6 +1226,8 @@ export default function OverlayPage() {
 
   // Check lyrics availability when track changes
   useEffect(() => {
+    let active = true;
+
     const checkLyrics = async () => {
       if (!snapshot?.props?.title || !snapshot?.props?.artist) {
         setLyricsAvailable(false);
@@ -1241,16 +1243,28 @@ export default function OverlayPage() {
           albumName: snapshot.props.album_title,
           durationMs: snapshot.duration_ms,
         });
-        // Only set available if synced lyrics exist
-        setLyricsAvailable(!!result.syncedLyrics);
-      } catch {
-        setLyricsAvailable(false);
+        if (active) {
+          setLyricsAvailable(!!result.syncedLyrics);
+        }
+      } catch (error) {
+        if (active) {
+          if (!String(error).includes('No lyrics found')) {
+            console.warn('Lyrics availability check failed', error);
+          }
+          setLyricsAvailable(false);
+        }
       } finally {
-        setLyricsLoading(false);
+        if (active) {
+          setLyricsLoading(false);
+        }
       }
     };
 
     checkLyrics();
+
+    return () => {
+      active = false;
+    };
   }, [snapshot?.props?.title, snapshot?.props?.artist, snapshot?.props?.album_title, snapshot?.duration_ms]);
 
   const snapshotImage = effectiveSnapshot?.props?.album_image
@@ -1518,7 +1532,7 @@ export default function OverlayPage() {
         {hasActiveMedia ? (
           <div className="relative z-10 flex h-full w-full items-center gap-3 px-3 py-2.5">
             <div
-              className={`relative flex h-full w-26 shrink-0 items-center justify-center ${isFading && appSwitchDirection
+              className={`relative flex h-full w-28 shrink-0 items-center justify-center ${isFading && appSwitchDirection
                 ? appSwitchDirection === 'up'
                   ? 'app-slide-out-up opacity-30'
                   : 'app-slide-out-down opacity-30'
@@ -1542,7 +1556,7 @@ export default function OverlayPage() {
               <StyledImage
                 src={getPlayerInfo(effectiveSnapshot?.source_app_id ?? sourceAppId).imageSrc}
                 alt={getPlayerInfo(effectiveSnapshot?.source_app_id ?? sourceAppId).name}
-                className={`absolute -bottom-[0.5vh] -left-[1.5vw] h-8 w-8 p-1 shadow-lg ${isFading && appSwitchDirection
+                className={`absolute -bottom-[calc(0.5vh_+_4px)] -left-[1.5vw] h-10 w-10 p-1 shadow-lg ${isFading && appSwitchDirection
                   ? appSwitchDirection === 'up'
                     ? 'app-slide-out-down opacity-30'
                     : 'app-slide-out-up opacity-30'
@@ -1552,8 +1566,8 @@ export default function OverlayPage() {
                       : 'app-slide-in-up'
                     : ''
                   } ${frozenSnapshot && !isFading ? 'opacity-0' : ''}`}
-                width={32}
-                height={32}
+                width={40}
+                height={40}
                 pinned={pinned}
                 unoptimized
               />
@@ -1572,6 +1586,8 @@ export default function OverlayPage() {
                     onMouseDown={handleLyricOverlayMouseDown}
                 onClick={handleLyricOverlayToggle}
                 title={lyricsLoading ? 'Loading...' : lyricsAvailable ? 'Lyrics' : 'No lyrics available'}
+                aria-label={lyricsLoading ? 'Checking for lyrics' : lyricsAvailable ? 'Open lyrics' : 'No lyrics available'}
+                aria-pressed={lyricsOverlayOpen}
                 data-no-drag
               >
                 {lyricsLoading ? (

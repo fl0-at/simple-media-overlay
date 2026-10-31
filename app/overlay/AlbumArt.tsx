@@ -17,15 +17,15 @@ export function AlbumArt({ imageSrc, albumTitle, pinned, imageKey }: AlbumArtPro
             className="flex flex-col items-center justify-center p-1"
             {...dragRegionProps}
         >
-            <div className="w-24 h-24 shrink-0" style={{ aspectRatio: '1/1' }}>
+            <div className="w-26 h-26 shrink-0" style={{ aspectRatio: '1/1' }}>
                 {imageSrc ? (
                     <StyledImage
                         key={imageKey}
                         src={imageSrc}
                         alt={albumTitle || 'Album Art'}
                         className="w-full h-full rounded-lg object-cover shadow-album-art"
-                        width={96}
-                        height={96}
+                        width={104}
+                        height={104}
                         pinned={pinned}
                         unoptimized
                     />
@@ -35,8 +35,8 @@ export function AlbumArt({ imageSrc, albumTitle, pinned, imageKey }: AlbumArtPro
                         src={'/Generic.svg'}
                         alt={'No Album Art'}
                         className="w-full h-full rounded-lg object-cover bg-white/5 shadow-album-art"
-                        width={96}
-                        height={96}
+                        width={104}
+                        height={104}
                         pinned={pinned}
                         unoptimized
                     />

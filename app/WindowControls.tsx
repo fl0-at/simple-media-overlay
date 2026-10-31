@@ -32,7 +32,9 @@ export function WindowControls({ pinned, onPinToggle, onPinPress, onClose }: Win
           pinned
             ? 'bg-white hover:bg-white/80 text-black'
             : 'bg-white/10 hover:bg-white/20 text-white'
-        }`}
+        } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white`}
+        aria-label={pinned ? 'Unpin overlay' : 'Pin overlay'}
+        aria-pressed={pinned}
         title={pinned ? 'Unpin' : 'Pin'}
       >
         {pinned ? <PinOff size={14} /> : <Pin size={14} />}
@@ -42,7 +44,8 @@ export function WindowControls({ pinned, onPinToggle, onPinPress, onClose }: Win
       <button
         onClick={handleClose}
         data-no-drag
-        className="w-8 h-8 rounded-full bg-white/10 hover:bg-red-500/80 transition-colors flex items-center justify-center text-white"
+        className="w-8 h-8 rounded-full bg-white/10 hover:bg-red-500/80 transition-colors flex items-center justify-center text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+        aria-label="Close window"
         title="Close"
       >
         <X size={14} />

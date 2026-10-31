@@ -86,6 +86,7 @@ export default function LyricsPage() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const currentWindowRef = useRef<ReturnType<typeof getCurrentWindow> | null>(null);
   const noLyricsTimeoutRef = useRef<number | null>(null);
+  const fetchRequestIdRef = useRef(0);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -137,6 +138,8 @@ export default function LyricsPage() {
   };
 
   const fetchLyrics = async (title: string, artist: string, albumTitle?: string | null, durationMs?: number | null) => {
+    const requestId = ++fetchRequestIdRef.current;
+
     // Early return if title or artist is missing — debounce to avoid flicker
     if (!title || !artist) {
       if (noLyricsTimeoutRef.current) {
@@ -144,6 +147,7 @@ export default function LyricsPage() {
         noLyricsTimeoutRef.current = null;
       }
       noLyricsTimeoutRef.current = window.setTimeout(() => {
+        if (requestId !== fetchRequestIdRef.current) return;
         setLoading(false);
         setError('No lyrics available');
         setCanRetry(false);
@@ -173,6 +177,8 @@ export default function LyricsPage() {
         durationMs,
       });
 
+      if (requestId !== fetchRequestIdRef.current) return;
+
       setLyrics(result);
 
       if (result.syncedLyrics) {
@@ -181,6 +187,8 @@ export default function LyricsPage() {
         setParsedLyrics([]);
       }
     } catch (e) {
+      if (requestId !== fetchRequestIdRef.current) return;
+
       const errorMsg = String(e);
 
       // Only show user-friendly errors to the user
@@ -206,7 +214,9 @@ export default function LyricsPage() {
       setLyrics(null);
       setParsedLyrics([]);
     } finally {
-      setLoading(false);
+      if (requestId === fetchRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
