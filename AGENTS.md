@@ -6,20 +6,35 @@ Simple Media Overlay is a Tauri 2 desktop application with a Next.js/React front
 
 ## Development
 
+### General rules
+
 - Use Node.js and Rust with the platform prerequisites documented in the README.
 - Install JavaScript dependencies with `npm install`.
 - Run the desktop app in development with `npx tauri dev`.
 - Build the desktop app with `npx tauri build`.
 - Keep platform-specific media behavior in the appropriate Rust backend while preserving the shared Tauri command surface.
 
-## Validation
+### Before making code changes
 
-There is no dedicated automated test suite or test script currently configured in the repository. The available package scripts are:
+- run `npm audit` to check for vulnerable packages and if possible resolve those.
+  - if it's not possible to mitigate the vulnearbilities with simple package updates, point that out
+- run `npm update` if you haven't already done so
+- before implementing big architectural changes, ask for approval
+
+### After making code changes
 
 - `npm run lint` — run ESLint.
+- `npm test` — run the Vitest suite.
 - `npm run build` — build the Next.js frontend.
+- if necessary, update [AGENTS.md](AGENTS.md) and [README.md](README.md) for new features or architectural changes you made
+- give a summary of the changes and explain why you chose the implementation you did
 
-Run the relevant checks for the files changed. For Rust backend changes, also run `cargo test --manifest-path src-tauri/Cargo.toml` when the environment has the required Tauri and platform build prerequisites; the repository currently contains no Rust test cases.
+GitHub Actions runs the first three commands for pull requests targeting `master` or `develop`, for pushes to those branches, and before release jobs. All must pass before a version bump or release proceeds. Run the relevant checks for the files changed locally. For Rust backend changes, also run `cargo test --manifest-path src-tauri/Cargo.toml` when the environment has the required Tauri and platform build prerequisites.
+
+### CI/CD Rules
+
+- never create pull requests on your own
+- never force push to protected branches
 
 ## Versioning and releases
 

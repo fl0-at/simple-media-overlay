@@ -9,7 +9,13 @@ on:
     types: [release-requested]
 
 jobs:
+  tests:
+    uses: ./.github/workflows/test.yml
+    with:
+      ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.tag || github.ref }}
+
   create-release:
+    needs: tests
     permissions:
       contents: write
     runs-on: ubuntu-latest

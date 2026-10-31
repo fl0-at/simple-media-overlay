@@ -67,6 +67,18 @@ The app includes automatic updates - you'll be notified when a new version is av
 
 Make sure you have [Rust](https://www.rust-lang.org/tools/install) and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) installed before building.
 
+### Running checks and tests
+
+Install dependencies with `npm ci` (or `npm install` when setting up locally), then run the frontend checks:
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
+The test suite uses Vitest. GitHub Actions runs all three checks for pull requests targeting `master` or `develop`, pushes to those branches, and before creating a release. To block merging when a check fails, require the `Tests / Lint, test, and build` status check in the repository's branch protection rules or rulesets for both branches.
+
 ## Supported media playback sources
 
 On Windows, any media player or application that publishes metadata about the currently playing media via GSMTC APIs should work out of the box, but these ones were tested and have their own dedicated icons:
