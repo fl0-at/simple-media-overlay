@@ -105,6 +105,11 @@ export default function LyricsPage() {
     if (typeof window === 'undefined') return;
     try {
       currentWindowRef.current = getCurrentWindow();
+      currentWindowRef.current.show()
+        .then(() => currentWindowRef.current?.setFocus())
+        .catch((e: unknown) => {
+          console.error('lyrics window show/focus failed', e);
+        });
     } catch {
       currentWindowRef.current = null;
     }

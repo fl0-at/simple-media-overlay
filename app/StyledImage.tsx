@@ -12,6 +12,8 @@ interface StyledImageProps {
   pinned: boolean;
   unoptimized?: boolean;
   fadeIn?: boolean;
+  onLoad?: () => void;
+  onError?: () => void;
 }
 
 export function StyledImage({
@@ -23,6 +25,8 @@ export function StyledImage({
   pinned,
   unoptimized = true,
   fadeIn = false,
+  onLoad,
+  onError,
 }: StyledImageProps) {
   const [isLoaded, setIsLoaded] = useState(!fadeIn); // Start as loaded if no fade-in needed
   
@@ -37,7 +41,9 @@ export function StyledImage({
       }}
       onLoad={() => {
         if (fadeIn) setIsLoaded(true);
+        onLoad?.();
       }}
+      onError={onError}
       style={{
         userSelect: 'none',
       } as never}

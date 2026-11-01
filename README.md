@@ -20,6 +20,7 @@ I decided to add a second overlay that displays synced lyrics, if available, sin
 - 🔁 Toggle repeat mode and/or shuffle, [if supported by the player](#current-limitations)
 - 🎼 Toggle the _Lyrics Overlay_ to see synced lyrics, if available on [LRC Library](https://lrclib.net)
 - ✨ Fancy animations when the currently played media or the playback source changes, is played/paused or the overlay is pinned
+- Album art shows a loading skeleton during track changes and image loading. If artwork is still missing after two seconds or fails to load, the no-art placeholder is shown.
 - 🔃 Automatic app-updates to ensure you are running the latest version
 
 ### Lyrics service errors

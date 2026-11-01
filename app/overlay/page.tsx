@@ -1215,18 +1215,6 @@ export default function OverlayPage() {
     };
   }, [artistMarqueeConfig.isActive, artistMarqueeConfig.delay, artistMarqueeConfig.fadeKeyframes, syncedDuration, marqueeSync, effectiveArtist]);
 
-  // Create unique timestamp for each track change to force re-render even if image data is identical
-  const [imageKeyTimestamp, setImageKeyTimestamp] = useState(0);
-
-  useEffect(() => {
-    // Avoid forcing an image remount while an app-switch animation is in progress.
-    // When switching apps we prefer to keep the previous/frozen image visible until
-    // the transition completes.
-    if (!appSwitchingRef.current && !isFading && !appSwitchAnimating) {
-      setImageKeyTimestamp(Date.now());
-    }
-  }, [snapshot?.props?.title, snapshot?.source_app_id, isFading, appSwitchAnimating]);
-
   // Check lyrics availability when track changes
   useEffect(() => {
     let active = true;
@@ -1300,9 +1288,12 @@ export default function OverlayPage() {
     }
   }, [snapshotImage, mediaImage, mediaMatchesSnapshot, effectiveSnapshot?.props.title, effectiveSnapshot?.props.artist, effectiveSnapshot?.source_app_id, media?.title, media?.artist, sourceAppId]);
 
-  const imageKey = `${effectiveSnapshot?.props?.title || 'unknown'}-${imageKeyTimestamp}`;
-
-  // Image key changes whenever track changes, forcing re-render
+  const imageKey = JSON.stringify([
+    normalizeAppId(effectiveSnapshot?.source_app_id ?? sourceAppId),
+    effectiveSnapshot?.props.title,
+    effectiveSnapshot?.props.artist,
+    effectiveSnapshot?.props.album_title,
+  ]);
 
   const durationMs = snapshot?.duration_ms ?? null;
 
@@ -1422,7 +1413,7 @@ export default function OverlayPage() {
           await existingWindow.show();
           await existingWindow.setFocus();
         } else {
-          const lyricsWindow = new WebviewWindow('lyrics', {
+          new WebviewWindow('lyrics', {
             url: '/lyrics',
             title: 'Lyrics provided by LRC Library',
             width: 408,
@@ -1430,23 +1421,12 @@ export default function OverlayPage() {
             alwaysOnTop: true,
             resizable: false,
             decorations: false,
-            visible: true,
+            visible: false,
             center: true,
             transparent: true,
             titleBarStyle: 'overlay',
             hiddenTitle: true,
           });
-
-          // Configure window context menu after creation
-          setTimeout(async () => {
-            try {
-              await lyricsWindow.show();
-              await lyricsWindow.setFocus();
-            } catch (err) {
-              console.warn('Error showing lyrics window:', err);
-            }
-          }, 100);
-
         }
         setLyricsOverlayOpen(true);
       } else {
