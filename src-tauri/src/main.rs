@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::time::Instant;
 
 #[cfg(target_os = "windows")]
@@ -19,7 +19,10 @@ use tauri_plugin_updater::UpdaterExt;
 #[cfg(not(target_os = "windows"))]
 use tokio::sync::Mutex;
 #[cfg(target_os = "windows")]
-use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedReceiver},
+    Mutex,
+};
 use tokio::time::sleep;
 
 #[cfg(target_os = "windows")]
@@ -109,7 +112,7 @@ struct LrcLibResponse {
     #[serde(rename = "albumName")]
     album_name: Option<String>,
     duration: Option<f64>,
-    instrumental: Option<bool>,
+    instrumental: bool,
     #[serde(rename = "plainLyrics")]
     plain_lyrics: Option<String>,
     #[serde(rename = "syncedLyrics")]
@@ -122,6 +125,81 @@ struct LyricsResponse {
     plain_lyrics: Option<String>,
     synced_lyrics: Option<String>,
     instrumental: bool,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum LyricsErrorCode {
+    NotFound,
+    InvalidRequest,
+    AccessDenied,
+    RateLimited,
+    ServiceUnavailable,
+    Timeout,
+    Connection,
+    InvalidResponse,
+    Unexpected,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LyricsFetchError {
+    code: LyricsErrorCode,
+    status: Option<u16>,
+    retry_after_seconds: Option<u64>,
+}
+
+impl LyricsFetchError {
+    fn new(code: LyricsErrorCode) -> Self {
+        Self {
+            code,
+            status: None,
+            retry_after_seconds: None,
+        }
+    }
+
+    fn from_http(status: u16, retry_after: Option<&str>) -> Self {
+        let code = match status {
+            404 => LyricsErrorCode::NotFound,
+            408 => LyricsErrorCode::Timeout,
+            429 => LyricsErrorCode::RateLimited,
+            401 | 403 => LyricsErrorCode::AccessDenied,
+            400..=499 => LyricsErrorCode::InvalidRequest,
+            500..=599 => LyricsErrorCode::ServiceUnavailable,
+            _ => LyricsErrorCode::Unexpected,
+        };
+        let retry_after_seconds = if matches!(
+            code,
+            LyricsErrorCode::RateLimited
+                | LyricsErrorCode::ServiceUnavailable
+                | LyricsErrorCode::Timeout
+        ) {
+            retry_after.and_then(|value| value.trim().parse().ok())
+        } else {
+            None
+        };
+        Self {
+            code,
+            status: Some(status),
+            retry_after_seconds,
+        }
+    }
+
+    fn from_network(error: reqwest::Error) -> Self {
+        log::warn!("Lyrics request failed: {}", error);
+        Self::new(if error.is_timeout() {
+            LyricsErrorCode::Timeout
+        } else if error.is_decode() {
+            LyricsErrorCode::InvalidResponse
+        } else {
+            LyricsErrorCode::Connection
+        })
+    }
+}
+
+fn lyrics_duration_seconds(duration_ms: i64) -> Option<i64> {
+    let seconds = (duration_ms as f64 / 1000.0).round() as i64;
+    (1..=3600).contains(&seconds).then_some(seconds)
 }
 
 #[cfg(target_os = "linux")]
@@ -452,7 +530,10 @@ fn snapshot_from_player(
         },
         is_playing,
         position_ms,
+        // MPRIS positions are computed live by the player at query time.
+        position_updated_at_ms: None,
         duration_ms,
+        playback_rate: None,
         is_shuffle,
         repeat_mode,
         source_app_id,
@@ -655,7 +736,12 @@ async fn fetch_lyrics(
     album_name: Option<String>,
     duration_ms: Option<i64>,
     state: State<'_, Arc<MediaState>>,
-) -> Result<LyricsResponse, String> {
+) -> Result<LyricsResponse, LyricsFetchError> {
+    if track_name.trim().is_empty() || artist_name.trim().is_empty() {
+        log::warn!("Lyrics request is missing a track title or artist");
+        return Err(LyricsFetchError::new(LyricsErrorCode::InvalidRequest));
+    }
+
     // Create cache key from artist and track name
     let cache_key = format!(
         "{}|{}",
@@ -686,9 +772,7 @@ async fn fetch_lyrics(
         }
     }
 
-    if let Some(duration) = duration_ms {
-        // Convert ms to seconds
-        let duration_sec = (duration as f64 / 1000.0).round() as i64;
+    if let Some(duration_sec) = duration_ms.and_then(lyrics_duration_seconds) {
         url.push_str(&format!("&duration={}", duration_sec));
     }
 
@@ -717,16 +801,7 @@ async fn fetch_lyrics(
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                "Request timed out. Please check your internet connection.".to_string()
-            } else if e.is_connect() {
-                "Cannot connect to lyrics service. Please check your internet connection."
-                    .to_string()
-            } else {
-                format!("Network error: {}", e)
-            }
-        })?;
+        .map_err(LyricsFetchError::from_network)?;
 
     let status = response.status();
 
@@ -734,12 +809,12 @@ async fn fetch_lyrics(
         let lrclib_data: LrcLibResponse = response
             .json()
             .await
-            .map_err(|e| format!("Failed to parse lyrics response: {}", e))?;
+            .map_err(LyricsFetchError::from_network)?;
 
         let lyrics_response = LyricsResponse {
             plain_lyrics: lrclib_data.plain_lyrics,
             synced_lyrics: lrclib_data.synced_lyrics,
-            instrumental: lrclib_data.instrumental.unwrap_or(false),
+            instrumental: lrclib_data.instrumental,
         };
 
         // Cache the result
@@ -749,31 +824,17 @@ async fn fetch_lyrics(
         }
 
         Ok(lyrics_response)
-    } else if status.as_u16() == 404 {
-        // No lyrics found - don't cache 404s to allow retrying if lyrics are added later
-        Err("No lyrics found".to_string())
-    } else if status.as_u16() == 429 {
-        // Rate limited - don't cache this
-        Err("Rate limit exceeded. Please try again later.".to_string())
-    } else if status.is_client_error() {
-        // 4xx errors (except 404 and 429)
-        Err(format!(
-            "Invalid request (HTTP {} \"{}\"). Please try a different song.",
-            status.as_u16(),
-            response.text().await.unwrap_or_default()
-        ))
-    } else if status.is_server_error() {
-        // 5xx errors - server issues
-        Err(format!(
-            "Lyrics service temporarily unavailable ({}). Please try again later.",
-            status.as_u16()
-        ))
     } else {
-        // Unexpected status
-        Err(format!(
-            "Unexpected response from lyrics service: {}",
-            status
-        ))
+        // Classify by status even when the network edge returns HTML instead of JSON.
+        let error = LyricsFetchError::from_http(
+            status.as_u16(),
+            response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+        );
+        log::warn!("Lyrics service returned HTTP {}: {:?}", status, error);
+        Err(error)
     }
 }
 
@@ -790,10 +851,28 @@ struct MediaSnapshotDto {
     props: MediaPropsDto,
     is_playing: bool,
     position_ms: Option<i64>,
+    // Unix epoch milliseconds at which `position_ms` was reported by the player.
+    // GSMTC positions are only refreshed occasionally (e.g. on play/pause/seek), so
+    // consumers must extrapolate from this timestamp. `None` means "fresh as of now".
+    position_updated_at_ms: Option<i64>,
     duration_ms: Option<i64>,
+    playback_rate: Option<f64>,
     is_shuffle: Option<bool>,
     repeat_mode: Option<RepeatMode>,
     source_app_id: Option<String>,
+}
+
+// 100 ns ticks between 1601-01-01 (Windows epoch) and 1970-01-01 (Unix epoch).
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_TO_UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_ticks_to_unix_ms(ticks: i64) -> Option<i64> {
+    // Players that never set LastUpdatedTime report 0 (or other pre-1970 values).
+    if ticks <= WINDOWS_TO_UNIX_EPOCH_TICKS {
+        return None;
+    }
+    Some((ticks - WINDOWS_TO_UNIX_EPOCH_TICKS) / 10_000)
 }
 
 #[derive(Debug, Default)]
@@ -801,15 +880,11 @@ struct MediaState {
     props: Mutex<Option<MediaPropsDto>>,
     // last full snapshot from GSMTC (for polling)
     snapshot: Mutex<Option<MediaSnapshotDto>>,
-    // Cache of base64-encoded thumbnails keyed by (source_app_id|title|album_title)
+    // Cache of base64-encoded thumbnails keyed by (source_app_id|album_title) or (source_app_id|title)
     thumbnail_cache: StdMutex<HashMap<String, String>>,
-    // Track the last title we successfully cached a thumbnail for (to detect stale fetches)
+    // Detects GSMTC thumbnails that still belong to the previous track.
     #[cfg(target_os = "windows")]
-    last_cached_title: Mutex<Option<String>>,
-    // Last known non-empty thumbnail, used to detect one-track-behind stale art
-    // even when intermediate snapshots intentionally emit without image.
-    #[cfg(target_os = "windows")]
-    last_non_empty_thumbnail: Mutex<Option<String>>,
+    stale_art_guard: StdMutex<StaleArtGuard>,
     // Cache of lyrics keyed by (artist|title)
     lyrics_cache: StdMutex<HashMap<String, LyricsResponse>>,
     // Prevent duplicate listener loops when frontend re-invokes start_media_listener.
@@ -834,13 +909,88 @@ fn map_repeat_mode_enum(mode: MediaPlaybackAutoRepeatMode) -> RepeatMode {
     }
 }
 
+// GSMTC often publishes a new track's title/album before its thumbnail, so for a short
+// time after a track change Windows keeps returning the previous track's artwork.
+// A thumbnail identical to the previous track's art is rejected for this long after an
+// album change; afterwards it is accepted, since different albums can share artwork.
+#[cfg(target_os = "windows")]
+const STALE_ART_WINDOW: Duration = Duration::from_millis(1500);
+// Shorter window when an album title is missing (e.g. TIDAL), because consecutive tracks
+// of the same album cannot be recognised and would otherwise lose their art for longer.
+#[cfg(target_os = "windows")]
+const STALE_ART_WINDOW_UNKNOWN_ALBUM: Duration = Duration::from_millis(400);
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Default)]
+struct StaleArtGuard {
+    track_identity: Option<String>,
+    album: Option<String>,
+    // Last thumbnail accepted for display.
+    last_art: Option<String>,
+    // Previous track's art, treated as stale until `suspect_until`.
+    suspect_art: Option<String>,
+    suspect_until: Option<Instant>,
+    // While verifying, the thumbnail is re-read from Windows instead of trusting the cache.
+    verify_until: Option<Instant>,
+}
+
+#[cfg(target_os = "windows")]
+impl StaleArtGuard {
+    fn observe_track(&mut self, identity: &str, album: Option<&str>, now: Instant) {
+        if self.track_identity.as_deref() == Some(identity) {
+            return;
+        }
+
+        let album = album.filter(|a| !a.is_empty());
+        let is_first_track = self.track_identity.is_none();
+        let same_album = matches!((self.album.as_deref(), album), (Some(a), Some(b)) if a == b);
+
+        // Same-album tracks legitimately share art. Keep any suspect from an earlier
+        // (possibly partial) metadata update in that case instead of clearing it.
+        if !is_first_track && !same_album {
+            if let Some(previous_art) = self.last_art.clone() {
+                let window = if self.album.is_some() && album.is_some() {
+                    STALE_ART_WINDOW
+                } else {
+                    STALE_ART_WINDOW_UNKNOWN_ALBUM
+                };
+                self.suspect_art = Some(previous_art);
+                self.suspect_until = Some(now + window);
+            }
+        }
+
+        self.track_identity = Some(identity.to_string());
+        self.album = album.map(str::to_string);
+        self.verify_until = Some(now + STALE_ART_WINDOW);
+    }
+
+    fn is_verifying(&self, now: Instant) -> bool {
+        let in_window = self.verify_until.map(|until| now < until).unwrap_or(false);
+        // If the previous track's art was eventually accepted, keep re-reading Windows so a
+        // late thumbnail update is still picked up instead of being masked by the cache.
+        let showing_previous_art =
+            self.suspect_art.is_some() && self.suspect_art == self.last_art;
+        in_window || showing_previous_art
+    }
+
+    fn is_stale(&self, image: &str, now: Instant) -> bool {
+        match (&self.suspect_art, self.suspect_until) {
+            (Some(suspect), Some(until)) => now < until && suspect == image,
+            _ => false,
+        }
+    }
+
+    fn accept(&mut self, image: &str) {
+        self.last_art = Some(image.to_string());
+    }
+}
+
 // Build a full snapshot from a GSMTC session (polling path).
 #[cfg(target_os = "windows")]
 fn snapshot_from_session(
     session: &GlobalSystemMediaTransportControlsSession,
     cache: Option<&StdMutex<HashMap<String, String>>>,
-    previous_thumbnail: Option<&String>,
-    previous_title: Option<&str>,
+    art_guard: &StdMutex<StaleArtGuard>,
 ) -> Result<MediaSnapshotDto, String> {
     // Media properties (async -> get)
     let media_props_op = session
@@ -880,7 +1030,16 @@ fn snapshot_from_session(
     let album_title = media_props.AlbumTitle().ok().map(|s| s.to_string());
 
     let position_ms = timeline.Position().ok().map(|t| t.Duration / 10_000); // 100 ns -> ms
+    let position_updated_at_ms = timeline
+        .LastUpdatedTime()
+        .ok()
+        .and_then(|t| windows_ticks_to_unix_ms(t.UniversalTime));
     let duration_ms = timeline.EndTime().ok().map(|t| t.Duration / 10_000);
+    let playback_rate = playback_info
+        .PlaybackRate()
+        .ok()
+        .and_then(|r| r.Value().ok())
+        .filter(|rate| rate.is_finite() && *rate > 0.0);
 
     let is_playing = matches!(
         status,
@@ -915,97 +1074,58 @@ fn snapshot_from_session(
         format!("{}\x1F{}", source_app_id.as_deref().unwrap_or(""), title)
     };
 
-    let album_image = if let Some(cache_mutex) = cache {
-        let mut guard = cache_mutex
-            .lock()
-            .map_err(|_| "thumbnail_cache lock poisoned")?;
-        if let Some(cached) = guard.get(&cache_key).cloned() {
-            // Even with a cache hit, verify freshness when track changes
-            // Windows GSMTC might still be returning stale data, so we need to check
-            let track_changed = previous_title.map(|prev| prev != title).unwrap_or(false);
+    let track_identity = format!(
+        "{}\x1F{}\x1F{}\x1F{}",
+        source_app_id.as_deref().unwrap_or(""),
+        title,
+        artist,
+        album_title.as_deref().unwrap_or("")
+    );
+    let now = Instant::now();
+    let mut art_guard = art_guard
+        .lock()
+        .map_err(|_| "stale_art_guard lock poisoned")?;
+    art_guard.observe_track(&track_identity, album_title.as_deref(), now);
 
-            if track_changed {
-                // Fetch what Windows is currently providing
-                let windows_thumb = thumbnail_to_base64(&media_props);
-
-                // Compare Windows data to cached data
-                if let Some(ref win_thumb) = windows_thumb {
-                    if win_thumb == &cached {
-                        // Windows data matches cache - cache is still fresh, use it
-                        Some(cached)
-                    } else {
-                        // Windows is providing different data
-                        // Check if Windows is providing stale data (matches previous track)
-                        let windows_is_stale = if let Some(prev_thumb) = previous_thumbnail {
-                            win_thumb == prev_thumb
-                        } else {
-                            false
-                        };
-
-                        if windows_is_stale {
-                            log::warn!("Windows providing stale thumbnail for '{}' (matches previous track, len: {}). Using cached version and will recheck next poll.", 
-                                title, win_thumb.len());
-                            // Windows is stale, trust the cache
-                            Some(cached)
-                        } else {
-                            // Windows has fresh, different data - update cache and use it
-                            log::warn!("Windows providing different thumbnail for '{}' than cached (win: {}, cached: {}). Updating cache with Windows version.", 
-                                title, win_thumb.len(), cached.len());
-                            guard.insert(cache_key.clone(), win_thumb.clone());
-                            Some(win_thumb.clone())
-                        }
-                    }
-                } else {
-                    // Windows has no thumbnail, but we have cache - use cache
-                    Some(cached)
-                }
-            } else {
-                // Same track, cache is valid
-                Some(cached)
-            }
-        } else {
-            let encoded = thumbnail_to_base64(&media_props);
-            if let Some(ref img) = encoded {
-                // Only check for stale thumbnails when the track has actually changed
-                // If same track, matching thumbnail is expected and correct
-                let track_changed = previous_title.map(|prev| prev != title).unwrap_or(false);
-                let is_stale = if track_changed {
-                    // Check if this "new" thumbnail matches the previous track's thumbnail
-                    // This detects Windows GSMTC returning stale data when track changes quickly
-                    if let Some(prev_thumb) = previous_thumbnail {
-                        img == prev_thumb
-                    } else {
-                        false
-                    }
-                } else {
-                    false // Same track, so matching thumbnail is expected
-                };
-
-                if is_stale {
-                    log::warn!("Fetched thumbnail for '{}' matches previous track's image (len: {}), likely stale from Windows GSMTC. Skipping thumbnail this cycle - will refetch on next poll.", 
-                        title, img.len());
-
-                    // Don't cache or return the stale thumbnail
-                    // Return None so the snapshot emits without an image
-                    // Next poll cycle (100ms later) will fetch it fresh as a cache MISS
-                    None
-                } else {
-                    // Fresh thumbnail, cache it normally
-                    guard.insert(cache_key.clone(), img.clone());
-
-                    // IMPORTANT: Mark this title as the last one we successfully cached
-                    // This will be used on next poll to detect stale thumbnails
-                    // Must happen in snapshot_from_session to ensure it's updated even if
-                    // the snapshot isn't emitted due to no changes
-                    encoded
-                }
-            } else {
-                encoded
-            }
-        }
-    } else {
-        thumbnail_to_base64(&media_props)
+    let mut cache_guard = match cache {
+        Some(cache_mutex) => Some(
+            cache_mutex
+                .lock()
+                .map_err(|_| "thumbnail_cache lock poisoned")?,
+        ),
+        None => None,
     };
+    let cached = cache_guard
+        .as_ref()
+        .and_then(|guard| guard.get(&cache_key).cloned());
+
+    let album_image = if cached.is_some() && !art_guard.is_verifying(now) {
+        cached
+    } else {
+        match thumbnail_to_base64(&media_props) {
+            Some(image) if art_guard.is_stale(&image, now) => {
+                log::debug!(
+                    "Ignoring stale GSMTC thumbnail for '{}' (matches previous track's art, len: {})",
+                    title,
+                    image.len()
+                );
+                cached
+            }
+            Some(image) => {
+                if let Some(guard) = cache_guard.as_mut() {
+                    guard.insert(cache_key, image.clone());
+                }
+                Some(image)
+            }
+            None => cached,
+        }
+    };
+
+    if let Some(image) = album_image.as_deref() {
+        art_guard.accept(image);
+    }
+    drop(cache_guard);
+    drop(art_guard);
 
     Ok(MediaSnapshotDto {
         props: MediaPropsDto {
@@ -1016,7 +1136,9 @@ fn snapshot_from_session(
         },
         is_playing,
         position_ms,
+        position_updated_at_ms,
         duration_ms,
+        playback_rate,
         is_shuffle,
         repeat_mode,
         source_app_id,
@@ -1058,17 +1180,10 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
             }
         };
 
-        // Extract previous thumbnail and last cached title before calling snapshot_from_session.
-        // Use a persistent non-empty thumbnail marker rather than snapshot image,
-        // because snapshot image may be intentionally None during stale-art suppression.
-        let prev_thumbnail = state.last_non_empty_thumbnail.lock().await.clone();
-        let last_cached_title = state.last_cached_title.lock().await.clone();
-
         let snap = match snapshot_from_session(
             &session,
             Some(&state.thumbnail_cache),
-            prev_thumbnail.as_ref(),
-            last_cached_title.as_deref(),
+            &state.stale_art_guard,
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -1095,31 +1210,6 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
                     old_snap.props.title,
                     snap.props.title
                 );
-
-                // Invalidate thumbnail cache for the old track to force fresh fetch
-                // This handles cases where Windows GSMTC returns stale thumbnail on track change
-                if let Ok(mut cache) = state.thumbnail_cache.lock() {
-                    let use_album = old_snap
-                        .props
-                        .album_title
-                        .as_ref()
-                        .map(|a| !a.is_empty())
-                        .unwrap_or(false);
-                    let old_key = if use_album {
-                        format!(
-                            "{}\x1F{}",
-                            old_snap.source_app_id.as_deref().unwrap_or(""),
-                            old_snap.props.album_title.as_deref().unwrap()
-                        )
-                    } else {
-                        format!(
-                            "{}\x1F{}",
-                            old_snap.source_app_id.as_deref().unwrap_or(""),
-                            old_snap.props.title
-                        )
-                    };
-                    cache.remove(&old_key);
-                }
             }
 
             media_changed || playback_changed || source_changed || old_snap != &snap
@@ -1130,19 +1220,7 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
         // Check playing status before snap is moved
         let is_playing = snap.is_playing;
 
-        if let Some(image) = snap.props.album_image.clone() {
-            let mut last_thumb_guard = state.last_non_empty_thumbnail.lock().await;
-            *last_thumb_guard = Some(image);
-        }
-
         if should_emit {
-            // Always update last_cached_title to current track title
-            // This is used for stale detection on the NEXT poll cycle
-            // Even if we skip this thumbnail, we want to compare against the current
-            // title on next fetch to continue detecting staleness
-            let mut last_title_guard = state.last_cached_title.lock().await;
-            *last_title_guard = Some(snap.props.title.clone());
-
             *snapshot_guard = Some(snap.clone());
             drop(snapshot_guard); // Release snapshot lock before acquiring props lock
 
@@ -1162,6 +1240,28 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
 }
 
 // ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+async fn emit_listener_media(app: &AppHandle, state: &MediaState, mut dto: MediaPropsDto) {
+    let is_stale = match (dto.album_image.as_deref(), state.stale_art_guard.lock()) {
+        (Some(image), Ok(guard)) => guard.is_stale(image, Instant::now()),
+        _ => false,
+    };
+    if is_stale {
+        dto.album_image = None;
+    }
+
+    log::debug!(
+        "gsmtc listener update: {} - {} (album: {:?}, has_image: {})",
+        dto.title,
+        dto.artist,
+        dto.album_title,
+        dto.album_image.is_some()
+    );
+
+    *state.props.lock().await = Some(dto.clone());
+    let _ = app.emit("media_update", dto);
+}
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
@@ -1185,9 +1285,8 @@ async fn start_media_listener(
         });
     }
 
-    // Keep your existing gsmtc-based listener (good, low-latency for many apps).
+    // Event-driven GSMTC listener: lower latency than polling for many apps.
     tauri::async_runtime::spawn(async move {
-        // Manager events receiver
         let mut mgr_rx: UnboundedReceiver<ManagerEvent> = match SessionManager::create().await {
             Ok(rx) => rx,
             Err(e) => {
@@ -1196,80 +1295,60 @@ async fn start_media_listener(
             }
         };
 
-        // Track a single current-session updates receiver for simplicity
-        let mut current_session_rx: Option<UnboundedReceiver<SessionUpdateEvent>> = None;
+        // Updates from every session are forwarded into one channel, tagged with their id,
+        // so they are handled as they arrive rather than only when a manager event fires.
+        let (update_tx, mut update_rx) =
+            unbounded_channel::<(usize, SessionUpdateEvent)>();
+        let mut current_session_id: Option<usize> = None;
+        let mut latest_media: HashMap<usize, MediaPropsDto> = HashMap::new();
 
-        while let Some(evt) = mgr_rx.recv().await {
-            match evt {
-                ManagerEvent::SessionCreated {
-                    session_id,
-                    rx,
-                    source,
-                } => {
-                    log::debug!("SessionCreated id={} source={}", session_id, source);
-                    // If we don't have a session yet, treat the first one as current
-                    if current_session_rx.is_none() {
-                        current_session_rx = Some(rx);
+        loop {
+            tokio::select! {
+                evt = mgr_rx.recv() => {
+                    let Some(evt) = evt else { break };
+                    match evt {
+                        ManagerEvent::SessionCreated { session_id, mut rx, source } => {
+                            log::debug!("SessionCreated id={} source={}", session_id, source);
+                            let tx = update_tx.clone();
+                            tauri::async_runtime::spawn(async move {
+                                while let Some(update) = rx.recv().await {
+                                    if tx.send((session_id, update)).is_err() {
+                                        break;
+                                    }
+                                }
+                            });
+                        }
+                        ManagerEvent::CurrentSessionChanged { session_id } => {
+                            log::debug!("CurrentSessionChanged: {:?}", session_id);
+                            current_session_id = session_id;
+                            if let Some(dto) = session_id.and_then(|id| latest_media.get(&id)) {
+                                emit_listener_media(&app_handle, &state_arc, dto.clone()).await;
+                            }
+                        }
+                        ManagerEvent::SessionRemoved { session_id } => {
+                            log::debug!("SessionRemoved id={}", session_id);
+                            latest_media.remove(&session_id);
+                            if current_session_id == Some(session_id) {
+                                current_session_id = None;
+                            }
+                        }
                     }
                 }
-                ManagerEvent::CurrentSessionChanged { session_id } => {
-                    log::debug!("CurrentSessionChanged: {:?}", session_id);
-                    // For a full solution, you’d maintain a map from session_id to its rx,
-                    // and switch current_session_rx here. Kept simple for now.
-                    let _ = session_id;
-                }
-                ManagerEvent::SessionRemoved { session_id } => {
-                    log::debug!("SessionRemoved id={}", session_id);
-                    // In a full solution, drop the corresponding rx if it was current.
-                }
-            }
+                Some((session_id, update)) = update_rx.recv() => {
+                    let SessionUpdateEvent::Media(session_model, image) = update else {
+                        continue;
+                    };
+                    let media = session_model.media.as_ref();
+                    let dto = MediaPropsDto {
+                        title: media.map(|m| m.title.clone()).unwrap_or_default(),
+                        artist: media.map(|m| m.artist.clone()).unwrap_or_default(),
+                        album_title: media.and_then(|m| m.album.as_ref().map(|a| a.title.clone())),
+                        album_image: image.map(|img| BASE64.encode(img.data)),
+                    };
+                    latest_media.insert(session_id, dto.clone());
 
-            // Drain updates from the current session, if any
-            if let Some(rx) = current_session_rx.as_mut() {
-                while let Ok(update) = rx.try_recv() {
-                    if let SessionUpdateEvent::Media(session_model, image) = update {
-                        let album_image = image
-                            .and_then(|img| Some(img.data))
-                            .map(|bytes| BASE64.encode(bytes));
-
-                        let title = session_model
-                            .media
-                            .as_ref()
-                            .map(|m| m.title.clone())
-                            .unwrap_or_default();
-
-                        let artist = session_model
-                            .media
-                            .as_ref()
-                            .map(|m| m.artist.clone())
-                            .unwrap_or_default();
-
-                        let album_title = session_model
-                            .media
-                            .as_ref()
-                            .and_then(|m| m.album.clone().map(|a| a.title));
-
-                        log::debug!(
-                            "gsmtc listener update: {} - {} (album: {:?}, has_image: {})",
-                            title,
-                            artist,
-                            album_title,
-                            album_image.is_some()
-                        );
-
-                        let dto = MediaPropsDto {
-                            title,
-                            artist,
-                            album_title,
-                            album_image,
-                        };
-
-                        {
-                            let mut guard = state_arc.props.lock().await;
-                            *guard = Some(dto.clone());
-                        }
-
-                        let _ = app_handle.emit("media_update", dto);
+                    if current_session_id == Some(session_id) {
+                        emit_listener_media(&app_handle, &state_arc, dto).await;
                     }
                 }
             }
@@ -1650,31 +1729,15 @@ async fn refresh_media_snapshot(
         }
     };
 
-    // Get previous data for stale-art detection and title comparison.
-    // Keep stale-art thumbnail source independent from snapshot image.
-    let prev_thumbnail = state.last_non_empty_thumbnail.lock().await.clone();
-    let prev_title = {
-        let snapshot_guard = state.snapshot.lock().await;
-        snapshot_guard
-            .as_ref()
-            .map(|prev_snap| prev_snap.props.title.clone())
-    };
-
     let snap = snapshot_from_session(
         &session,
         Some(&state.thumbnail_cache),
-        prev_thumbnail.as_ref(),
-        prev_title.as_deref(),
+        &state.stale_art_guard,
     )?;
 
     let mut snapshot_guard = state.snapshot.lock().await;
     *snapshot_guard = Some(snap.clone());
     drop(snapshot_guard);
-
-    if let Some(image) = snap.props.album_image.clone() {
-        let mut last_thumb_guard = state.last_non_empty_thumbnail.lock().await;
-        *last_thumb_guard = Some(image);
-    }
 
     let mut props_guard = state.props.lock().await;
     *props_guard = Some(snap.props.clone());
@@ -2002,6 +2065,188 @@ async fn check_for_updates(app: AppHandle) {
         }
         None => {
             log::warn!("Updater not available");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lyrics_http_errors_are_structured_even_without_a_json_body() {
+        for (status, code) in [
+            (400, LyricsErrorCode::InvalidRequest),
+            (401, LyricsErrorCode::AccessDenied),
+            (403, LyricsErrorCode::AccessDenied),
+            (404, LyricsErrorCode::NotFound),
+            (408, LyricsErrorCode::Timeout),
+            (422, LyricsErrorCode::InvalidRequest),
+            (429, LyricsErrorCode::RateLimited),
+            (500, LyricsErrorCode::ServiceUnavailable),
+            (502, LyricsErrorCode::ServiceUnavailable),
+            (503, LyricsErrorCode::ServiceUnavailable),
+            (504, LyricsErrorCode::ServiceUnavailable),
+            (302, LyricsErrorCode::Unexpected),
+        ] {
+            let error = LyricsFetchError::from_http(status, None);
+            assert_eq!(error.code, code);
+            assert_eq!(error.status, Some(status));
+            assert_eq!(error.retry_after_seconds, None);
+        }
+    }
+
+    #[test]
+    fn lyrics_retry_delay_is_only_forwarded_for_transient_failures() {
+        for status in [408, 429, 502, 503] {
+            assert_eq!(
+                LyricsFetchError::from_http(status, Some(" 30 ")).retry_after_seconds,
+                Some(30)
+            );
+        }
+        for value in ["invalid", "-1", "1.5", "18446744073709551616"] {
+            assert_eq!(
+                LyricsFetchError::from_http(429, Some(value)).retry_after_seconds,
+                None
+            );
+        }
+        assert_eq!(
+            LyricsFetchError::from_http(404, Some("30")).retry_after_seconds,
+            None
+        );
+        assert_eq!(
+            LyricsFetchError::from_http(503, Some("0")).retry_after_seconds,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn lyrics_error_serialization_matches_frontend_contract() {
+        assert_eq!(
+            serde_json::to_value(LyricsFetchError::from_http(503, Some("1"))).unwrap(),
+            serde_json::json!({
+                "code": "service_unavailable",
+                "status": 503,
+                "retryAfterSeconds": 1
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(LyricsFetchError::new(LyricsErrorCode::Connection)).unwrap(),
+            serde_json::json!({
+                "code": "connection",
+                "status": null,
+                "retryAfterSeconds": null
+            })
+        );
+    }
+
+    #[test]
+    fn lyrics_duration_omits_metadata_outside_lrclib_limits() {
+        for duration in [-1000, 0, 499, 3_600_500, i64::MAX] {
+            assert_eq!(lyrics_duration_seconds(duration), None);
+        }
+        for (duration, expected) in [(500, 1), (233_000, 233), (3_600_000, 3600)] {
+            assert_eq!(lyrics_duration_seconds(duration), Some(expected));
+        }
+    }
+
+    #[test]
+    fn lyrics_response_requires_a_valid_record_but_allows_instrumentals() {
+        assert!(serde_json::from_str::<LrcLibResponse>("{}").is_err());
+        assert!(serde_json::from_str::<LrcLibResponse>("<html>Bad gateway</html>").is_err());
+        let instrumental: LrcLibResponse =
+            serde_json::from_value(serde_json::json!({
+                "instrumental": true,
+                "plainLyrics": null,
+                "syncedLyrics": null
+            }))
+            .unwrap();
+        assert!(instrumental.instrumental);
+        assert!(instrumental.synced_lyrics.is_none());
+    }
+
+    #[test]
+    fn windows_ticks_convert_to_unix_ms() {
+        assert_eq!(windows_ticks_to_unix_ms(WINDOWS_TO_UNIX_EPOCH_TICKS + 10_000), Some(1));
+        // 2023-11-14T22:13:20Z
+        assert_eq!(
+            windows_ticks_to_unix_ms(WINDOWS_TO_UNIX_EPOCH_TICKS + 1_700_000_000_000 * 10_000),
+            Some(1_700_000_000_000)
+        );
+    }
+
+    #[test]
+    fn unset_windows_ticks_are_ignored() {
+        assert_eq!(windows_ticks_to_unix_ms(0), None);
+        assert_eq!(windows_ticks_to_unix_ms(WINDOWS_TO_UNIX_EPOCH_TICKS), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    mod stale_art_guard {
+        use super::*;
+
+        fn guard_showing(identity: &str, album: Option<&str>, art: &str, now: Instant) -> StaleArtGuard {
+            let mut guard = StaleArtGuard::default();
+            guard.observe_track(identity, album, now);
+            guard.accept(art);
+            guard
+        }
+
+        #[test]
+        fn rejects_previous_album_art_for_entire_window_not_just_first_poll() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t10", Some("Album A"), "art-a", start);
+
+            guard.observe_track("t11", Some("Album B"), start);
+            assert!(guard.is_stale("art-a", start));
+            // Later polls of the same track must still reject the lagging thumbnail.
+            assert!(guard.is_stale("art-a", start + Duration::from_millis(300)));
+            assert!(guard.is_verifying(start + Duration::from_millis(300)));
+            assert!(!guard.is_stale("art-b", start + Duration::from_millis(300)));
+        }
+
+        #[test]
+        fn accepts_shared_art_after_window_and_keeps_verifying() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t10", Some("Album A"), "art-a", start);
+            guard.observe_track("t11", Some("Album B"), start);
+
+            let later = start + STALE_ART_WINDOW;
+            assert!(!guard.is_stale("art-a", later));
+            guard.accept("art-a");
+            assert!(guard.is_verifying(later + Duration::from_secs(10)));
+
+            guard.accept("art-b");
+            assert!(!guard.is_verifying(later + Duration::from_secs(10)));
+        }
+
+        #[test]
+        fn same_album_tracks_share_art() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t1", Some("Album A"), "art-a", start);
+            guard.observe_track("t2", Some("Album A"), start);
+            assert!(!guard.is_stale("art-a", start));
+        }
+
+        #[test]
+        fn staged_metadata_update_keeps_suspect() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t10", Some("Album A"), "art-a", start);
+
+            // Windows publishes the new album before the new title...
+            guard.observe_track("t10-b", Some("Album B"), start);
+            // ...and then the title, which no longer looks like an album change.
+            guard.observe_track("t11", Some("Album B"), start + Duration::from_millis(100));
+            assert!(guard.is_stale("art-a", start + Duration::from_millis(200)));
+        }
+
+        #[test]
+        fn unknown_album_uses_short_window() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t1", None, "art", start);
+            guard.observe_track("t2", None, start);
+            assert!(guard.is_stale("art", start));
+            assert!(!guard.is_stale("art", start + STALE_ART_WINDOW_UNKNOWN_ALBUM));
         }
     }
 }

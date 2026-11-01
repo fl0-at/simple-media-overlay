@@ -58,6 +58,16 @@ git commit -m "perf: optimize media timeline rendering"
 
 ## Complete Workflow
 
+### Required checks
+
+GitHub Actions runs linting, the Vitest test suite, and the Next.js build for pull requests targeting `master` or `develop` and for pushes to either branch. The version-bump and release workflows also wait for these checks to pass, so a failed check prevents an automatic version bump or release. To make the check a merge prerequisite, require `Tests / Lint, test, and build` in the repository's branch protection rules or rulesets for both branches. Run the same checks locally before proposing a change:
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
 1. **Make changes** and commit with descriptive messages
 
    ```bash

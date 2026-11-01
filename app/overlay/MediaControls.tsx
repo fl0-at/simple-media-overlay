@@ -57,7 +57,7 @@ export function MediaControls({
       {showPlaybackModes && (
         <button
           className={
-            'px-2 py-1 rounded-full min-w-10 text-xs ' +
+            'px-2 py-1 rounded-full min-w-10 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ' +
             (repeatMode !== 'none'
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
@@ -66,37 +66,42 @@ export function MediaControls({
           onClick={onRepeat}
           id="repeat-button"
           data-no-drag
+          aria-label={`Repeat ${repeatMode}`}
+          aria-pressed={repeatMode !== 'none'}
           title="Repeat Mode"
         >
           {getRepeatIcon()}
         </button>
       )}
       <button
-        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
+        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
         id="back-button"
         onMouseDown={onControlPress}
         onClick={onPrevious}
         data-no-drag
+        aria-label="Previous track"
         title="Previous"
       >
         <SkipBack />
       </button>
       <button
-        className={`px-3 py-1 rounded-full font-semibold min-w-10 ${playPauseImpact ? 'impact-animation' : ''} ${isPlaying ? 'bg-white text-xs text-black hover:bg-white/80' : 'bg-white/10 text-white hover:bg-white/20'}`}
+        className={`px-3 py-1 rounded-full font-semibold min-w-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ${playPauseImpact ? 'impact-animation' : ''} ${isPlaying ? 'bg-white text-xs text-black hover:bg-white/80' : 'bg-white/10 text-white hover:bg-white/20'}`}
         id="play-pause-button"
         onMouseDown={onControlPress}
         onClick={onPlayPause}
         data-no-drag
+        aria-label={isPlaying ? 'Pause' : 'Play'}
         title={isPlaying ? 'Pause' : 'Play'}
       >
         {playbackLoading ? <Loader2 className="animate-spin" /> : isPlaying ? <Pause /> : <Play />}
       </button>
       <button
-        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs"
+        className="px-2 py-1 rounded-full bg-white/10 hover:bg-white/20 min-w-10 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
         id="next-button"
         onMouseDown={onControlPress}
         onClick={onNext}
         data-no-drag
+        aria-label="Next track"
         title="Next"
       >
         <SkipForward />
@@ -104,7 +109,7 @@ export function MediaControls({
       {showPlaybackModes && (
         <button
           className={
-            'px-2 py-1 rounded-full min-w-10 text-xs ' +
+            'px-2 py-1 rounded-full min-w-10 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white ' +
             (isShuffle
               ? 'bg-white text-black font-semibold'
               : 'bg-white/10 hover:bg-white/20 text-white')
@@ -113,6 +118,8 @@ export function MediaControls({
           onClick={onShuffle}
           id="shuffle-button"
           data-no-drag
+          aria-label="Shuffle"
+          aria-pressed={isShuffle}
           title="Shuffle"
         >
           <Shuffle />
