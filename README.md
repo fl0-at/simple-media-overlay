@@ -22,6 +22,12 @@ I decided to add a second overlay that displays synced lyrics, if available, sin
 - ✨ Fancy animations when the currently played media or the playback source changes, is played/paused or the overlay is pinned
 - 🔃 Automatic app-updates to ensure you are running the latest version
 
+### Lyrics service errors
+
+The lyrics overlay shows specific messages for connection failures, timeouts, rate limits, and temporary LRCLIB outages (including HTTP 502). These errors offer a **Retry** button; when LRCLIB sends a `Retry-After` delay in seconds, the button stays disabled with a countdown until that delay has elapsed. Requests are not retried automatically.
+
+Missing lyrics, tracks without synced lyrics, invalid track information, access-denied responses, and unreadable or unexpected responses do not offer an immediate retry. Missing lyrics are not cached, so switching tracks or reopening the overlay can check again later. Valid instrumental tracks continue to display the instrumental indicator.
+
 ## Prerequisites
 
 - **Windows 10 or Windows 11** for the Windows backend via GSMTC

@@ -112,7 +112,7 @@ struct LrcLibResponse {
     #[serde(rename = "albumName")]
     album_name: Option<String>,
     duration: Option<f64>,
-    instrumental: Option<bool>,
+    instrumental: bool,
     #[serde(rename = "plainLyrics")]
     plain_lyrics: Option<String>,
     #[serde(rename = "syncedLyrics")]
@@ -125,6 +125,81 @@ struct LyricsResponse {
     plain_lyrics: Option<String>,
     synced_lyrics: Option<String>,
     instrumental: bool,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum LyricsErrorCode {
+    NotFound,
+    InvalidRequest,
+    AccessDenied,
+    RateLimited,
+    ServiceUnavailable,
+    Timeout,
+    Connection,
+    InvalidResponse,
+    Unexpected,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LyricsFetchError {
+    code: LyricsErrorCode,
+    status: Option<u16>,
+    retry_after_seconds: Option<u64>,
+}
+
+impl LyricsFetchError {
+    fn new(code: LyricsErrorCode) -> Self {
+        Self {
+            code,
+            status: None,
+            retry_after_seconds: None,
+        }
+    }
+
+    fn from_http(status: u16, retry_after: Option<&str>) -> Self {
+        let code = match status {
+            404 => LyricsErrorCode::NotFound,
+            408 => LyricsErrorCode::Timeout,
+            429 => LyricsErrorCode::RateLimited,
+            401 | 403 => LyricsErrorCode::AccessDenied,
+            400..=499 => LyricsErrorCode::InvalidRequest,
+            500..=599 => LyricsErrorCode::ServiceUnavailable,
+            _ => LyricsErrorCode::Unexpected,
+        };
+        let retry_after_seconds = if matches!(
+            code,
+            LyricsErrorCode::RateLimited
+                | LyricsErrorCode::ServiceUnavailable
+                | LyricsErrorCode::Timeout
+        ) {
+            retry_after.and_then(|value| value.trim().parse().ok())
+        } else {
+            None
+        };
+        Self {
+            code,
+            status: Some(status),
+            retry_after_seconds,
+        }
+    }
+
+    fn from_network(error: reqwest::Error) -> Self {
+        log::warn!("Lyrics request failed: {}", error);
+        Self::new(if error.is_timeout() {
+            LyricsErrorCode::Timeout
+        } else if error.is_decode() {
+            LyricsErrorCode::InvalidResponse
+        } else {
+            LyricsErrorCode::Connection
+        })
+    }
+}
+
+fn lyrics_duration_seconds(duration_ms: i64) -> Option<i64> {
+    let seconds = (duration_ms as f64 / 1000.0).round() as i64;
+    (1..=3600).contains(&seconds).then_some(seconds)
 }
 
 #[cfg(target_os = "linux")]
@@ -661,7 +736,12 @@ async fn fetch_lyrics(
     album_name: Option<String>,
     duration_ms: Option<i64>,
     state: State<'_, Arc<MediaState>>,
-) -> Result<LyricsResponse, String> {
+) -> Result<LyricsResponse, LyricsFetchError> {
+    if track_name.trim().is_empty() || artist_name.trim().is_empty() {
+        log::warn!("Lyrics request is missing a track title or artist");
+        return Err(LyricsFetchError::new(LyricsErrorCode::InvalidRequest));
+    }
+
     // Create cache key from artist and track name
     let cache_key = format!(
         "{}|{}",
@@ -692,9 +772,7 @@ async fn fetch_lyrics(
         }
     }
 
-    if let Some(duration) = duration_ms {
-        // Convert ms to seconds
-        let duration_sec = (duration as f64 / 1000.0).round() as i64;
+    if let Some(duration_sec) = duration_ms.and_then(lyrics_duration_seconds) {
         url.push_str(&format!("&duration={}", duration_sec));
     }
 
@@ -723,16 +801,7 @@ async fn fetch_lyrics(
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                "Request timed out. Please check your internet connection.".to_string()
-            } else if e.is_connect() {
-                "Cannot connect to lyrics service. Please check your internet connection."
-                    .to_string()
-            } else {
-                format!("Network error: {}", e)
-            }
-        })?;
+        .map_err(LyricsFetchError::from_network)?;
 
     let status = response.status();
 
@@ -740,12 +809,12 @@ async fn fetch_lyrics(
         let lrclib_data: LrcLibResponse = response
             .json()
             .await
-            .map_err(|e| format!("Failed to parse lyrics response: {}", e))?;
+            .map_err(LyricsFetchError::from_network)?;
 
         let lyrics_response = LyricsResponse {
             plain_lyrics: lrclib_data.plain_lyrics,
             synced_lyrics: lrclib_data.synced_lyrics,
-            instrumental: lrclib_data.instrumental.unwrap_or(false),
+            instrumental: lrclib_data.instrumental,
         };
 
         // Cache the result
@@ -755,31 +824,17 @@ async fn fetch_lyrics(
         }
 
         Ok(lyrics_response)
-    } else if status.as_u16() == 404 {
-        // No lyrics found - don't cache 404s to allow retrying if lyrics are added later
-        Err("No lyrics found".to_string())
-    } else if status.as_u16() == 429 {
-        // Rate limited - don't cache this
-        Err("Rate limit exceeded. Please try again later.".to_string())
-    } else if status.is_client_error() {
-        // 4xx errors (except 404 and 429)
-        Err(format!(
-            "Invalid request (HTTP {} \"{}\"). Please try a different song.",
-            status.as_u16(),
-            response.text().await.unwrap_or_default()
-        ))
-    } else if status.is_server_error() {
-        // 5xx errors - server issues
-        Err(format!(
-            "Lyrics service temporarily unavailable ({}). Please try again later.",
-            status.as_u16()
-        ))
     } else {
-        // Unexpected status
-        Err(format!(
-            "Unexpected response from lyrics service: {}",
-            status
-        ))
+        // Classify by status even when the network edge returns HTML instead of JSON.
+        let error = LyricsFetchError::from_http(
+            status.as_u16(),
+            response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+        );
+        log::warn!("Lyrics service returned HTTP {}: {:?}", status, error);
+        Err(error)
     }
 }
 
@@ -2017,6 +2072,98 @@ async fn check_for_updates(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lyrics_http_errors_are_structured_even_without_a_json_body() {
+        for (status, code) in [
+            (400, LyricsErrorCode::InvalidRequest),
+            (401, LyricsErrorCode::AccessDenied),
+            (403, LyricsErrorCode::AccessDenied),
+            (404, LyricsErrorCode::NotFound),
+            (408, LyricsErrorCode::Timeout),
+            (422, LyricsErrorCode::InvalidRequest),
+            (429, LyricsErrorCode::RateLimited),
+            (500, LyricsErrorCode::ServiceUnavailable),
+            (502, LyricsErrorCode::ServiceUnavailable),
+            (503, LyricsErrorCode::ServiceUnavailable),
+            (504, LyricsErrorCode::ServiceUnavailable),
+            (302, LyricsErrorCode::Unexpected),
+        ] {
+            let error = LyricsFetchError::from_http(status, None);
+            assert_eq!(error.code, code);
+            assert_eq!(error.status, Some(status));
+            assert_eq!(error.retry_after_seconds, None);
+        }
+    }
+
+    #[test]
+    fn lyrics_retry_delay_is_only_forwarded_for_transient_failures() {
+        for status in [408, 429, 502, 503] {
+            assert_eq!(
+                LyricsFetchError::from_http(status, Some(" 30 ")).retry_after_seconds,
+                Some(30)
+            );
+        }
+        for value in ["invalid", "-1", "1.5", "18446744073709551616"] {
+            assert_eq!(
+                LyricsFetchError::from_http(429, Some(value)).retry_after_seconds,
+                None
+            );
+        }
+        assert_eq!(
+            LyricsFetchError::from_http(404, Some("30")).retry_after_seconds,
+            None
+        );
+        assert_eq!(
+            LyricsFetchError::from_http(503, Some("0")).retry_after_seconds,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn lyrics_error_serialization_matches_frontend_contract() {
+        assert_eq!(
+            serde_json::to_value(LyricsFetchError::from_http(503, Some("1"))).unwrap(),
+            serde_json::json!({
+                "code": "service_unavailable",
+                "status": 503,
+                "retryAfterSeconds": 1
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(LyricsFetchError::new(LyricsErrorCode::Connection)).unwrap(),
+            serde_json::json!({
+                "code": "connection",
+                "status": null,
+                "retryAfterSeconds": null
+            })
+        );
+    }
+
+    #[test]
+    fn lyrics_duration_omits_metadata_outside_lrclib_limits() {
+        for duration in [-1000, 0, 499, 3_600_500, i64::MAX] {
+            assert_eq!(lyrics_duration_seconds(duration), None);
+        }
+        for (duration, expected) in [(500, 1), (233_000, 233), (3_600_000, 3600)] {
+            assert_eq!(lyrics_duration_seconds(duration), Some(expected));
+        }
+    }
+
+    #[test]
+    fn lyrics_response_requires_a_valid_record_but_allows_instrumentals() {
+        assert!(serde_json::from_str::<LrcLibResponse>("{}").is_err());
+        assert!(serde_json::from_str::<LrcLibResponse>("<html>Bad gateway</html>").is_err());
+        let instrumental: LrcLibResponse =
+            serde_json::from_value(serde_json::json!({
+                "instrumental": true,
+                "plainLyrics": null,
+                "syncedLyrics": null
+            }))
+            .unwrap();
+        assert!(instrumental.instrumental);
+        assert!(instrumental.synced_lyrics.is_none());
+    }
 
     #[test]
     fn windows_ticks_convert_to_unix_ms() {

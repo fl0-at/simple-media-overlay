@@ -541,83 +541,85 @@ export default function OverlayPage() {
 
   // Detect track changes and trigger animation
   useEffect(() => {
-    const currentTitle = effectiveTitle;
+    // Schedule visual updates for the next frame rather than cascading renders in the effect.
+    const frameId = requestAnimationFrame(() => {
+      const currentTitle = effectiveTitle;
 
-    // Skip if we have a pending snapshot (app switch in progress) OR app switch animation is active
-    if (pendingSnapshotRef.current || appSwitchDirection) {
-      // Update ref but don't trigger animation - app switch will handle it
-      previousTitleRef.current = currentTitle;
-      return;
-    }
+      // Skip if we have a pending snapshot (app switch in progress) OR app switch animation is active
+      if (pendingSnapshotRef.current || appSwitchDirection) {
+        // Update ref but don't trigger animation - app switch will handle it
+        previousTitleRef.current = currentTitle;
+        return;
+      }
 
-    // Only animate if we have a previous title and it's different
-    // AND we're not currently doing an app switch animation
-    if (previousTitleRef.current && currentTitle && previousTitleRef.current !== currentTitle && !appSwitchDirection) {
-      // Clear spinner if pending next/previous
-      if (pendingTrackChangeRef.current) {
-        setPlaybackLoading(false);
-        pendingTrackChangeRef.current = null;
-        if (playbackLoadingTimeoutRef.current !== null) {
-          clearTimeout(playbackLoadingTimeoutRef.current);
-          playbackLoadingTimeoutRef.current = null;
+      // Only animate if we have a previous title and it's different
+      // AND we're not currently doing an app switch animation
+      if (previousTitleRef.current && currentTitle && previousTitleRef.current !== currentTitle && !appSwitchDirection) {
+        // Clear spinner if pending next/previous
+        if (pendingTrackChangeRef.current) {
+          setPlaybackLoading(false);
+          pendingTrackChangeRef.current = null;
+          if (playbackLoadingTimeoutRef.current !== null) {
+            clearTimeout(playbackLoadingTimeoutRef.current);
+            playbackLoadingTimeoutRef.current = null;
+          }
         }
-      }
 
-      // Log snapshot progress values for debugging
+        // Log snapshot progress values for debugging
 
-      if (snapshot) {
-        console.log('[Track Change Detected]', {
-          prevTitle: previousTitleRef.current,
-          newTitle: currentTitle,
-          position_ms: snapshot.position_ms,
-          duration_ms: snapshot.duration_ms,
-          is_playing: snapshot.is_playing,
-        });
+        if (snapshot) {
+          console.log('[Track Change Detected]', {
+            prevTitle: previousTitleRef.current,
+            newTitle: currentTitle,
+            position_ms: snapshot.position_ms,
+            duration_ms: snapshot.duration_ms,
+            is_playing: snapshot.is_playing,
+          });
 
-        // Workaround: If position_ms is unusually high after a track change,
-        // keep UI timeline from jumping to 100% for this frame.
-        const duration = snapshot.duration_ms || 0;
-        const position = snapshot.position_ms || 0;
-        // Consider >10% of duration or >5s as suspicious for a new track
-        if (
-          duration > 0 &&
-          position > 0 &&
-          (position > duration * 0.1 || position > 5000)
-        ) {          
-          console.warn('[Track Change Workaround] Unusually high position_ms after track change, using local reset for this frame.', { position, duration });
+          // Workaround: If position_ms is unusually high after a track change,
+          // keep UI timeline from jumping to 100% for this frame.
+          const duration = snapshot.duration_ms || 0;
+          const position = snapshot.position_ms || 0;
+          // Consider >10% of duration or >5s as suspicious for a new track
+          if (
+            duration > 0 &&
+            position > 0 &&
+            (position > duration * 0.1 || position > 5000)
+          ) {
+            console.warn('[Track Change Workaround] Unusually high position_ms after track change, using local reset for this frame.', { position, duration });
+          }
         }
+
+        // If no direction was set (external control), default to 'next'
+        if (!trackChangeDirection) {
+          setTrackChangeDirection('next');
+        }
+
+        // Clear fading and start slide animation
+        setIsFading(false);
+
+        // Increment key to force animation retrigger
+        setAnimationKey(prev => prev + 1);
+        setIsAnimating(true);
+
+        // Clear animation state after it completes.
+        if (trackAnimationTimeoutRef.current !== null) {
+          clearTimeout(trackAnimationTimeoutRef.current);
+          trackAnimationTimeoutRef.current = null;
+        }
+        trackAnimationTimeoutRef.current = window.setTimeout(() => {
+          setIsAnimating(false);
+          setTrackChangeDirection(null); // Clear direction after animation
+          trackAnimationTimeoutRef.current = null;
+        }, 350); // Slightly longer than animation duration to ensure completion
+
+        previousTitleRef.current = currentTitle;
+      } else if (currentTitle) {
+        previousTitleRef.current = currentTitle;
       }
+    });
 
-      // If no direction was set (external control), default to 'next'
-      if (!trackChangeDirection) {
-        // Starting the timed slide animation is a side effect of the title change; the
-        // ref-based bookkeeping it relies on cannot move into render.
-         
-        setTrackChangeDirection('next');
-      }
-
-      // Clear fading and start slide animation
-      setIsFading(false);
-
-      // Increment key to force animation retrigger
-      setAnimationKey(prev => prev + 1);
-      setIsAnimating(true);
-
-      // Clear animation state after it completes.
-      if (trackAnimationTimeoutRef.current !== null) {
-        clearTimeout(trackAnimationTimeoutRef.current);
-        trackAnimationTimeoutRef.current = null;
-      }
-      trackAnimationTimeoutRef.current = window.setTimeout(() => {
-        setIsAnimating(false);
-        setTrackChangeDirection(null); // Clear direction after animation
-        trackAnimationTimeoutRef.current = null;
-      }, 350); // Slightly longer than animation duration to ensure completion
-
-      previousTitleRef.current = currentTitle;
-    } else if (currentTitle) {
-      previousTitleRef.current = currentTitle;
-    }
+    return () => cancelAnimationFrame(frameId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTitle, trackChangeDirection, appSwitchDirection]);
 
