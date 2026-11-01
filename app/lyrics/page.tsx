@@ -90,6 +90,7 @@ export default function LyricsPage() {
   const currentWindowRef = useRef<ReturnType<typeof getCurrentWindow> | null>(null);
   const noLyricsTimeoutRef = useRef<number | null>(null);
   const fetchRequestIdRef = useRef(0);
+  const closingRef = useRef(false);
 
   useEffect(() => {
     if (!retryAt) return;
@@ -146,6 +147,8 @@ export default function LyricsPage() {
   };
 
   const handleClose = async () => {
+    // Stop focus/visibility handlers from issuing IPC calls while the webview is torn down.
+    closingRef.current = true;
     await emit('lyrics-window-closed');
     if (currentWindowRef.current) {
       await currentWindowRef.current.close();
@@ -382,6 +385,9 @@ export default function LyricsPage() {
     });
 
     const reassertTopmost = () => {
+      if (closingRef.current || document.visibilityState !== 'visible') {
+        return;
+      }
       window.setAlwaysOnTop(true).catch(() => {
         // Best effort on Linux window managers.
       });
