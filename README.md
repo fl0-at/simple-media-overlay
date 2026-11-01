@@ -38,7 +38,7 @@ Missing lyrics, tracks without synced lyrics, invalid track information, access-
 
 If you want to build from source or contribute to development:
 
-- **[Node.js](https://nodejs.org/)** (v18 or higher recommended)
+- **[Node.js](https://nodejs.org/)** (24, matching the existing CI/build toolchain)
 - **[Rust](https://www.rust-lang.org/tools/install)** and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 ## Running the overlay
@@ -85,6 +85,18 @@ npm run build
 ```
 
 The test suite uses Vitest. GitHub Actions runs all three checks for pull requests targeting `master` or `develop`, pushes to those branches, and before creating a release. To block merging when a check fails, require the `Tests / Lint, test, and build` status check in the repository's branch protection rules or rulesets for both branches.
+
+### Development and stable releases
+
+`develop` produces prereleases of the reviewed target, such as `1.0.8-dev.1`
+and `1.0.8-dev.2`. A regular merge into `master` finalizes `1.0.8` and rebuilds
+the stable artifacts. Development downloads use NSIS on Windows and AppImage
+on Linux; stable downloads retain MSI and AppImage. Automatic updates follow
+stable releases only.
+
+See [VERSIONING.md](VERSIONING.md) for the explicit target policy, protected-branch
+synchronization, required signing secrets, migration, and failed-release recovery.
+Run `npm run test:release` for the focused release lifecycle tests.
 
 ## Supported media playback sources
 

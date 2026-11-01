@@ -1,368 +1,226 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+      source:
+        required: true
+        type: string
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: true
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing managed tag to resume (never creates a tag)
+        required: true
+        type: string
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options: [development, stable]
+      source:
+        description: Full tested source SHA recorded in the annotated tag
+        required: true
+        type: string
   repository_dispatch:
     types: [release-requested]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publishing-${{ inputs.channel || github.event.client_payload.channel || 'invalid' }}
+  cancel-in-progress: false
+  queue: max
+
 jobs:
-  tests:
-    uses: ./.github/workflows/test.yml
-    with:
-      ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.tag || github.ref }}
-
-  create-release:
-    needs: tests
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
+  validate:
+    runs-on: ubuntu-24.04
     outputs:
-      release_id: ${{ steps.create-release.outputs.result }}
-      tag_name: ${{ steps.set-tag.outputs.tag }}
-      is_prerelease: ${{ steps.set-tag.outputs.prerelease }}
-
+      tag: ${{ steps.validate.outputs.tag }}
+      channel: ${{ steps.validate.outputs.channel }}
+      source: ${{ steps.validate.outputs.source }}
     steps:
-      - name: Set tag name
-        id: set-tag
+      - name: Validate explicit request
+        id: request
+        env:
+          TAG: ${{ inputs.tag || github.event.client_payload.tag }}
+          CHANNEL: ${{ inputs.channel || github.event.client_payload.channel }}
+          SOURCE: ${{ inputs.source || github.event.client_payload.source }}
         run: |
-          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            TAG="${{ github.event.client_payload.tag }}"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          if [[ "$TAG" == *-* ]]; then
-            echo "prerelease=true" >> $GITHUB_OUTPUT
-          else
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Guard release channel by tag
-        run: |
-          TAG="${{ steps.set-tag.outputs.tag }}"
-          ACTUAL="${{ steps.set-tag.outputs.prerelease }}"
-          EXPECTED="false"
-
-          if [[ "$TAG" == *-* ]]; then
-            EXPECTED="true"
-          fi
-
-          if [[ "$ACTUAL" != "$EXPECTED" ]]; then
-            echo "ERROR: prerelease mismatch for tag $TAG (expected $EXPECTED, got $ACTUAL)"
-            exit 1
-          fi
-
-      - uses: actions/checkout@v4
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-dev\.[1-9][0-9]*)?$/.test(process.env.TAG)
+              || !['development', 'stable'].includes(process.env.CHANNEL)
+              || !/^[a-f0-9]{40}$/.test(process.env.SOURCE)) {
+            throw new Error('Release request requires a managed SemVer tag, explicit channel, and full source SHA');
+          }
+          for (const key of ['TAG', 'CHANNEL', 'SOURCE']) {
+            appendFileSync(process.env.GITHUB_OUTPUT, `${key.toLowerCase()}=${process.env[key]}\n`);
+          }
+          JS
+      - uses: actions/checkout@v7.0.1
         with:
+          ref: ${{ steps.request.outputs.tag }}
           fetch-depth: 0
-          ref: ${{ steps.set-tag.outputs.tag }}
-          fetch-tags: true
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - name: Verify tag provenance and embedded versions
+        id: validate
+        env:
+          RELEASE_TAG: ${{ steps.request.outputs.tag }}
+          RELEASE_CHANNEL: ${{ steps.request.outputs.channel }}
+          RELEASE_SOURCE: ${{ steps.request.outputs.source }}
+        run: node scripts/validate-release.mjs
 
-      - name: Generate release notes
-        id: generate-notes
-        run: |
-          # Get the previous tag
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          CURRENT_TAG=${{ steps.set-tag.outputs.tag }}
-          
-          if [ -z "$PREVIOUS_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
-          else
-            COMMITS=$(git log ${PREVIOUS_TAG}..${CURRENT_TAG} --pretty=format:"- %s (%h)" --no-merges | grep -v "chore: bump version")
-          fi
-          
-          # Start building release notes
-          echo "## 🎉 Simple Media Overlay ${CURRENT_TAG}" > /tmp/release_notes.md
-          echo "" >> /tmp/release_notes.md
-          echo "Thank you for using Simple Media Overlay! This release includes the following updates:" >> /tmp/release_notes.md
-          echo "" >> /tmp/release_notes.md
-          
-          # Categorize commits
-          FEATURES=$(echo "$COMMITS" | grep -E "^- (feat|feature):" | sed 's/^- feat: /- ✨ /' | sed 's/^- feature: /- ✨ /' || true)
-          FIXES=$(echo "$COMMITS" | grep -E "^- (fix|bugfix):" | sed 's/^- fix: /- 🐛 /' | sed 's/^- bugfix: /- 🐛 /' || true)
-          PERF=$(echo "$COMMITS" | grep -E "^- (perf|performance):" | sed 's/^- perf: /- ⚡ /' | sed 's/^- performance: /- ⚡ /' || true)
-          IMPROVEMENTS=$(echo "$COMMITS" | grep -E "^- (improve|enhancement):" | sed 's/^- improve: /- 🔧 /' | sed 's/^- enhancement: /- 🔧 /' || true)
-          OTHER=$(echo "$COMMITS" | grep -vE "^- (feat|feature|fix|bugfix|perf|performance|improve|enhancement|chore|docs|style|refactor|test|build|ci):" || true)
-          
-          if [ -n "$FEATURES" ]; then
-            echo "### ✨ New Features" >> /tmp/release_notes.md
-            echo "$FEATURES" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-          
-          if [ -n "$IMPROVEMENTS" ]; then
-            echo "### 🔧 Improvements" >> /tmp/release_notes.md
-            echo "$IMPROVEMENTS" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-          
-          if [ -n "$FIXES" ]; then
-            echo "### 🐛 Bug Fixes" >> /tmp/release_notes.md
-            echo "$FIXES" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-          
-          if [ -n "$PERF" ]; then
-            echo "### ⚡ Performance Improvements" >> /tmp/release_notes.md
-            echo "$PERF" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-          
-          if [ -n "$OTHER" ]; then
-            echo "### 📝 Other Changes" >> /tmp/release_notes.md
-            echo "$OTHER" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-          
-          echo "---" >> /tmp/release_notes.md
-          echo "" >> /tmp/release_notes.md
-          echo "## 📦 Installation" >> /tmp/release_notes.md
-          echo "" >> /tmp/release_notes.md
-          echo "Download the installer for your platform from the assets below:" >> /tmp/release_notes.md
-          echo "" >> /tmp/release_notes.md
-          echo "- **Windows**: \`simple-media-overlay_${CURRENT_TAG#v}_x64_en-US.msi\`" >> /tmp/release_notes.md
-          echo "- **Linux**: \`simple-media-overlay_${CURRENT_TAG#v}_amd64.AppImage\`" >> /tmp/release_notes.md
-          echo "" >> /tmp/release_notes.md
-          echo "If you already have Simple Media Overlay installed, the app will automatically update to this version when you restart it! 🚀" >> /tmp/release_notes.md
-          echo "" >> /tmp/release_notes.md
-          
-          if [ -n "$PREVIOUS_TAG" ]; then
-            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${CURRENT_TAG}" >> /tmp/release_notes.md
-          fi
-          
-          cat /tmp/release_notes.md
+  tests:
+    needs: validate
+    uses: ./.github/workflows/test.yml
+    with:
+      ref: ${{ needs.validate.outputs.tag }}
 
-      - name: Create release
-        id: create-release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const releaseNotes = fs.readFileSync('/tmp/release_notes.md', 'utf8');
-            
-            const { data } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tagName,
-              name: tagName,
-              body: releaseNotes,
-              draft: false,
-              prerelease: isPrerelease
-            });
-            return data.id;
-
-  build-tauri:
-    needs: create-release
+  create-release:
+    needs: [validate, tests]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      complete: ${{ steps.release.outputs.complete }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - name: Create or resume draft
+        id: release
+        uses: actions/github-script@v9.0.0
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
+          RELEASE_SOURCE: ${{ needs.validate.outputs.source }}
+        with:
+          script: |
+            const { beginRelease } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/publish-release.mjs`);
+            const result = await beginRelease(github, context.repo, process.env);
+            core.setOutput('release_id', result.id);
+            core.setOutput('complete', result.complete);
+
+  build-tauri:
+    needs: [validate, create-release]
+    if: needs.create-release.outputs.complete != 'true'
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'windows-latest'
-            args: ''
-          - platform: 'ubuntu-latest'
-            args: ''
-
-    runs-on: ${{ matrix.platform }}
+          - runner: windows-2022
+            platform: windows-x86_64
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
-          fetch-depth: 0
-          ref: ${{ needs.create-release.outputs.tag_name }}
-          fetch-tags: true
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
-
+          package-manager-cache: false
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: './src-tauri -> target'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build the app with signing
+      - run: npm ci
+      - name: Build signed artifacts with the tagged embedded version
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- ${{ matrix.args }}
-
-      - name: Upload Windows bundle to release
-        if: matrix.platform == 'windows-latest'
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
+        shell: bash
         run: |
-          $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
-          $msiPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi"
-          gh release upload ${{ needs.create-release.outputs.tag_name }} $msiPath --clobber
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Upload Windows signature to release
-        if: matrix.platform == 'windows-latest'
-        run: |
-          $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
-          $sigPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi.sig"
-          if (Test-Path $sigPath) {
-            gh release upload ${{ needs.create-release.outputs.tag_name }} $sigPath --clobber
-          } else {
-            Write-Host "WARNING: Signature file not found at $sigPath"
-          }
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Linux bundle and signature to release
-        if: matrix.platform == 'ubuntu-latest'
-        run: |
-          APPIMAGE_PATH=$(find src-tauri/target/release/bundle -type f -name "*.AppImage" | head -n 1)
-          if [ -z "$APPIMAGE_PATH" ]; then
-            echo "ERROR: No AppImage artifact found"
-            find src-tauri/target/release/bundle -maxdepth 4 -type f || true
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "ERROR: TAURI_SIGNING_PRIVATE_KEY is required"
             exit 1
           fi
-
-          SIG_PATH="${APPIMAGE_PATH}.sig"
-          if [ ! -f "$SIG_PATH" ]; then
-            echo "ERROR: Signature file not found for AppImage at $SIG_PATH"
-            find src-tauri/target -type f -name "*.sig" || true
-            exit 1
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            if [ "$RELEASE_CHANNEL" = "development" ]; then
+              npm run tauri build -- --bundles nsis -- --locked
+            else
+              npm run tauri build -- --bundles msi -- --locked
+            fi
+          else
+            npm run tauri build -- --bundles appimage -- --locked
           fi
-
-          gh release upload ${{ needs.create-release.outputs.tag_name }} "$APPIMAGE_PATH" --clobber
-          gh release upload ${{ needs.create-release.outputs.tag_name }} "$SIG_PATH" --clobber
+      - name: Collect installer, signature and updater metadata
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create updater metadata fragment (Windows)
-        if: matrix.platform == 'windows-latest'
-        run: |
-          $version = "${{ needs.create-release.outputs.tag_name }}".TrimStart('v')
-          $msiUrl = "https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.tag_name }}/simple-media-overlay_${version}_x64_en-US.msi"
-          $sigPath = "src-tauri/target/release/bundle/msi/simple-media-overlay_${version}_x64_en-US.msi.sig"
-          
-          Write-Host "Looking for signature file at: $sigPath"
-          
-          if (Test-Path $sigPath) {
-            Write-Host "Found signature file!"
-            $signature = Get-Content $sigPath -Raw
-
-            $json = @{
-              platform = "windows-x86_64"
-              version = $version
-              url = $msiUrl
-              signature = $signature.Trim()
-            } | ConvertTo-Json -Depth 10
-          } else {
-            Write-Host "ERROR: Signature file not found!"
-            Write-Host "Tauri v2 requires signed updates. Build failed!"
-            Write-Host "Listing all .sig files in target directory:"
-            Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "*.sig" -ErrorAction SilentlyContinue
-            exit 1
-          }
-
-          $json | Out-File -FilePath "updater-metadata-windows.json" -Encoding utf8
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create updater metadata fragment (Linux)
-        if: matrix.platform == 'ubuntu-latest'
-        run: |
-          VERSION="${{ needs.create-release.outputs.tag_name }}"
-          VERSION="${VERSION#v}"
-
-          APPIMAGE_PATH=$(find src-tauri/target/release/bundle -type f -name "*.AppImage" | head -n 1)
-          if [ -z "$APPIMAGE_PATH" ]; then
-            echo "ERROR: No AppImage artifact found"
-            exit 1
-          fi
-
-          SIG_PATH="${APPIMAGE_PATH}.sig"
-          if [ ! -f "$SIG_PATH" ]; then
-            echo "ERROR: Signature file not found for AppImage at $SIG_PATH"
-            exit 1
-          fi
-
-          APPIMAGE_NAME=$(basename "$APPIMAGE_PATH")
-          APPIMAGE_URL="https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.tag_name }}/${APPIMAGE_NAME}"
-          SIGNATURE=$(cat "$SIG_PATH")
-
-          jq -n \
-            --arg platform "linux-x86_64" \
-            --arg version "$VERSION" \
-            --arg url "$APPIMAGE_URL" \
-            --arg signature "${SIGNATURE}" \
-            '{ platform: $platform, version: $version, url: $url, signature: ($signature | gsub("\\n$"; "")) }' \
-            > updater-metadata-linux.json
-
-      - name: Upload updater metadata fragment
-        uses: actions/upload-artifact@v4
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+        run: node scripts/collect-release.mjs
+      - uses: actions/upload-artifact@v7.0.2
         with:
-          name: updater-metadata-${{ matrix.platform }}
-          path: updater-metadata-*.json
+          name: release-${{ matrix.platform }}
+          path: release-assets
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
 
-  publish-updater-json:
-    needs: [create-release, build-tauri]
+  publish:
+    needs: [validate, create-release, build-tauri]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
-    runs-on: ubuntu-latest
     steps:
-      - name: Download updater metadata fragments
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7.0.1
         with:
-          path: updater-metadata
-          pattern: updater-metadata-*
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          path: release-assets
+          pattern: release-*
           merge-multiple: true
-
-      - name: Create latest.json from platform metadata
-        run: |
-          VERSION="${{ needs.create-release.outputs.tag_name }}"
-          VERSION="${VERSION#v}"
-
-          if ! compgen -G "updater-metadata/*.json" > /dev/null; then
-            echo "ERROR: No updater metadata fragments found"
-            exit 1
-          fi
-
-          PLATFORMS_JSON=$(jq -s 'map({(.platform): { signature: .signature, url: .url }}) | add' updater-metadata/*.json)
-
-          jq -n \
-            --arg version "$VERSION" \
-            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg notes "See release notes for details" \
-            --argjson platforms "$PLATFORMS_JSON" \
-            '{ version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms }' \
-            > latest.json
-
-          cat latest.json
-
-      - name: Upload latest.json to release
-        run: gh release upload ${{ needs.create-release.outputs.tag_name }} latest.json --clobber -R ${{ github.repository }}
+      - name: Upload complete assets and publish
+        uses: actions/github-script@v9.0.0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_CHANNEL: ${{ needs.validate.outputs.channel }}
+          RELEASE_SOURCE: ${{ needs.validate.outputs.source }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const { publishRelease } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/publish-release.mjs`);
+            await publishRelease(github, context.repo, process.env);
