@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::time::Instant;
 
 #[cfg(target_os = "windows")]
@@ -19,7 +19,10 @@ use tauri_plugin_updater::UpdaterExt;
 #[cfg(not(target_os = "windows"))]
 use tokio::sync::Mutex;
 #[cfg(target_os = "windows")]
-use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedReceiver},
+    Mutex,
+};
 use tokio::time::sleep;
 
 #[cfg(target_os = "windows")]
@@ -822,15 +825,11 @@ struct MediaState {
     props: Mutex<Option<MediaPropsDto>>,
     // last full snapshot from GSMTC (for polling)
     snapshot: Mutex<Option<MediaSnapshotDto>>,
-    // Cache of base64-encoded thumbnails keyed by (source_app_id|title|album_title)
+    // Cache of base64-encoded thumbnails keyed by (source_app_id|album_title) or (source_app_id|title)
     thumbnail_cache: StdMutex<HashMap<String, String>>,
-    // Track the last title we successfully cached a thumbnail for (to detect stale fetches)
+    // Detects GSMTC thumbnails that still belong to the previous track.
     #[cfg(target_os = "windows")]
-    last_cached_title: Mutex<Option<String>>,
-    // Last known non-empty thumbnail, used to detect one-track-behind stale art
-    // even when intermediate snapshots intentionally emit without image.
-    #[cfg(target_os = "windows")]
-    last_non_empty_thumbnail: Mutex<Option<String>>,
+    stale_art_guard: StdMutex<StaleArtGuard>,
     // Cache of lyrics keyed by (artist|title)
     lyrics_cache: StdMutex<HashMap<String, LyricsResponse>>,
     // Prevent duplicate listener loops when frontend re-invokes start_media_listener.
@@ -855,13 +854,88 @@ fn map_repeat_mode_enum(mode: MediaPlaybackAutoRepeatMode) -> RepeatMode {
     }
 }
 
+// GSMTC often publishes a new track's title/album before its thumbnail, so for a short
+// time after a track change Windows keeps returning the previous track's artwork.
+// A thumbnail identical to the previous track's art is rejected for this long after an
+// album change; afterwards it is accepted, since different albums can share artwork.
+#[cfg(target_os = "windows")]
+const STALE_ART_WINDOW: Duration = Duration::from_millis(1500);
+// Shorter window when an album title is missing (e.g. TIDAL), because consecutive tracks
+// of the same album cannot be recognised and would otherwise lose their art for longer.
+#[cfg(target_os = "windows")]
+const STALE_ART_WINDOW_UNKNOWN_ALBUM: Duration = Duration::from_millis(400);
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Default)]
+struct StaleArtGuard {
+    track_identity: Option<String>,
+    album: Option<String>,
+    // Last thumbnail accepted for display.
+    last_art: Option<String>,
+    // Previous track's art, treated as stale until `suspect_until`.
+    suspect_art: Option<String>,
+    suspect_until: Option<Instant>,
+    // While verifying, the thumbnail is re-read from Windows instead of trusting the cache.
+    verify_until: Option<Instant>,
+}
+
+#[cfg(target_os = "windows")]
+impl StaleArtGuard {
+    fn observe_track(&mut self, identity: &str, album: Option<&str>, now: Instant) {
+        if self.track_identity.as_deref() == Some(identity) {
+            return;
+        }
+
+        let album = album.filter(|a| !a.is_empty());
+        let is_first_track = self.track_identity.is_none();
+        let same_album = matches!((self.album.as_deref(), album), (Some(a), Some(b)) if a == b);
+
+        // Same-album tracks legitimately share art. Keep any suspect from an earlier
+        // (possibly partial) metadata update in that case instead of clearing it.
+        if !is_first_track && !same_album {
+            if let Some(previous_art) = self.last_art.clone() {
+                let window = if self.album.is_some() && album.is_some() {
+                    STALE_ART_WINDOW
+                } else {
+                    STALE_ART_WINDOW_UNKNOWN_ALBUM
+                };
+                self.suspect_art = Some(previous_art);
+                self.suspect_until = Some(now + window);
+            }
+        }
+
+        self.track_identity = Some(identity.to_string());
+        self.album = album.map(str::to_string);
+        self.verify_until = Some(now + STALE_ART_WINDOW);
+    }
+
+    fn is_verifying(&self, now: Instant) -> bool {
+        let in_window = self.verify_until.map(|until| now < until).unwrap_or(false);
+        // If the previous track's art was eventually accepted, keep re-reading Windows so a
+        // late thumbnail update is still picked up instead of being masked by the cache.
+        let showing_previous_art =
+            self.suspect_art.is_some() && self.suspect_art == self.last_art;
+        in_window || showing_previous_art
+    }
+
+    fn is_stale(&self, image: &str, now: Instant) -> bool {
+        match (&self.suspect_art, self.suspect_until) {
+            (Some(suspect), Some(until)) => now < until && suspect == image,
+            _ => false,
+        }
+    }
+
+    fn accept(&mut self, image: &str) {
+        self.last_art = Some(image.to_string());
+    }
+}
+
 // Build a full snapshot from a GSMTC session (polling path).
 #[cfg(target_os = "windows")]
 fn snapshot_from_session(
     session: &GlobalSystemMediaTransportControlsSession,
     cache: Option<&StdMutex<HashMap<String, String>>>,
-    previous_thumbnail: Option<&String>,
-    previous_title: Option<&str>,
+    art_guard: &StdMutex<StaleArtGuard>,
 ) -> Result<MediaSnapshotDto, String> {
     // Media properties (async -> get)
     let media_props_op = session
@@ -945,97 +1019,58 @@ fn snapshot_from_session(
         format!("{}\x1F{}", source_app_id.as_deref().unwrap_or(""), title)
     };
 
-    let album_image = if let Some(cache_mutex) = cache {
-        let mut guard = cache_mutex
-            .lock()
-            .map_err(|_| "thumbnail_cache lock poisoned")?;
-        if let Some(cached) = guard.get(&cache_key).cloned() {
-            // Even with a cache hit, verify freshness when track changes
-            // Windows GSMTC might still be returning stale data, so we need to check
-            let track_changed = previous_title.map(|prev| prev != title).unwrap_or(false);
+    let track_identity = format!(
+        "{}\x1F{}\x1F{}\x1F{}",
+        source_app_id.as_deref().unwrap_or(""),
+        title,
+        artist,
+        album_title.as_deref().unwrap_or("")
+    );
+    let now = Instant::now();
+    let mut art_guard = art_guard
+        .lock()
+        .map_err(|_| "stale_art_guard lock poisoned")?;
+    art_guard.observe_track(&track_identity, album_title.as_deref(), now);
 
-            if track_changed {
-                // Fetch what Windows is currently providing
-                let windows_thumb = thumbnail_to_base64(&media_props);
-
-                // Compare Windows data to cached data
-                if let Some(ref win_thumb) = windows_thumb {
-                    if win_thumb == &cached {
-                        // Windows data matches cache - cache is still fresh, use it
-                        Some(cached)
-                    } else {
-                        // Windows is providing different data
-                        // Check if Windows is providing stale data (matches previous track)
-                        let windows_is_stale = if let Some(prev_thumb) = previous_thumbnail {
-                            win_thumb == prev_thumb
-                        } else {
-                            false
-                        };
-
-                        if windows_is_stale {
-                            log::warn!("Windows providing stale thumbnail for '{}' (matches previous track, len: {}). Using cached version and will recheck next poll.", 
-                                title, win_thumb.len());
-                            // Windows is stale, trust the cache
-                            Some(cached)
-                        } else {
-                            // Windows has fresh, different data - update cache and use it
-                            log::warn!("Windows providing different thumbnail for '{}' than cached (win: {}, cached: {}). Updating cache with Windows version.", 
-                                title, win_thumb.len(), cached.len());
-                            guard.insert(cache_key.clone(), win_thumb.clone());
-                            Some(win_thumb.clone())
-                        }
-                    }
-                } else {
-                    // Windows has no thumbnail, but we have cache - use cache
-                    Some(cached)
-                }
-            } else {
-                // Same track, cache is valid
-                Some(cached)
-            }
-        } else {
-            let encoded = thumbnail_to_base64(&media_props);
-            if let Some(ref img) = encoded {
-                // Only check for stale thumbnails when the track has actually changed
-                // If same track, matching thumbnail is expected and correct
-                let track_changed = previous_title.map(|prev| prev != title).unwrap_or(false);
-                let is_stale = if track_changed {
-                    // Check if this "new" thumbnail matches the previous track's thumbnail
-                    // This detects Windows GSMTC returning stale data when track changes quickly
-                    if let Some(prev_thumb) = previous_thumbnail {
-                        img == prev_thumb
-                    } else {
-                        false
-                    }
-                } else {
-                    false // Same track, so matching thumbnail is expected
-                };
-
-                if is_stale {
-                    log::warn!("Fetched thumbnail for '{}' matches previous track's image (len: {}), likely stale from Windows GSMTC. Skipping thumbnail this cycle - will refetch on next poll.", 
-                        title, img.len());
-
-                    // Don't cache or return the stale thumbnail
-                    // Return None so the snapshot emits without an image
-                    // Next poll cycle (100ms later) will fetch it fresh as a cache MISS
-                    None
-                } else {
-                    // Fresh thumbnail, cache it normally
-                    guard.insert(cache_key.clone(), img.clone());
-
-                    // IMPORTANT: Mark this title as the last one we successfully cached
-                    // This will be used on next poll to detect stale thumbnails
-                    // Must happen in snapshot_from_session to ensure it's updated even if
-                    // the snapshot isn't emitted due to no changes
-                    encoded
-                }
-            } else {
-                encoded
-            }
-        }
-    } else {
-        thumbnail_to_base64(&media_props)
+    let mut cache_guard = match cache {
+        Some(cache_mutex) => Some(
+            cache_mutex
+                .lock()
+                .map_err(|_| "thumbnail_cache lock poisoned")?,
+        ),
+        None => None,
     };
+    let cached = cache_guard
+        .as_ref()
+        .and_then(|guard| guard.get(&cache_key).cloned());
+
+    let album_image = if cached.is_some() && !art_guard.is_verifying(now) {
+        cached
+    } else {
+        match thumbnail_to_base64(&media_props) {
+            Some(image) if art_guard.is_stale(&image, now) => {
+                log::debug!(
+                    "Ignoring stale GSMTC thumbnail for '{}' (matches previous track's art, len: {})",
+                    title,
+                    image.len()
+                );
+                cached
+            }
+            Some(image) => {
+                if let Some(guard) = cache_guard.as_mut() {
+                    guard.insert(cache_key, image.clone());
+                }
+                Some(image)
+            }
+            None => cached,
+        }
+    };
+
+    if let Some(image) = album_image.as_deref() {
+        art_guard.accept(image);
+    }
+    drop(cache_guard);
+    drop(art_guard);
 
     Ok(MediaSnapshotDto {
         props: MediaPropsDto {
@@ -1090,17 +1125,10 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
             }
         };
 
-        // Extract previous thumbnail and last cached title before calling snapshot_from_session.
-        // Use a persistent non-empty thumbnail marker rather than snapshot image,
-        // because snapshot image may be intentionally None during stale-art suppression.
-        let prev_thumbnail = state.last_non_empty_thumbnail.lock().await.clone();
-        let last_cached_title = state.last_cached_title.lock().await.clone();
-
         let snap = match snapshot_from_session(
             &session,
             Some(&state.thumbnail_cache),
-            prev_thumbnail.as_ref(),
-            last_cached_title.as_deref(),
+            &state.stale_art_guard,
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -1127,31 +1155,6 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
                     old_snap.props.title,
                     snap.props.title
                 );
-
-                // Invalidate thumbnail cache for the old track to force fresh fetch
-                // This handles cases where Windows GSMTC returns stale thumbnail on track change
-                if let Ok(mut cache) = state.thumbnail_cache.lock() {
-                    let use_album = old_snap
-                        .props
-                        .album_title
-                        .as_ref()
-                        .map(|a| !a.is_empty())
-                        .unwrap_or(false);
-                    let old_key = if use_album {
-                        format!(
-                            "{}\x1F{}",
-                            old_snap.source_app_id.as_deref().unwrap_or(""),
-                            old_snap.props.album_title.as_deref().unwrap()
-                        )
-                    } else {
-                        format!(
-                            "{}\x1F{}",
-                            old_snap.source_app_id.as_deref().unwrap_or(""),
-                            old_snap.props.title
-                        )
-                    };
-                    cache.remove(&old_key);
-                }
             }
 
             media_changed || playback_changed || source_changed || old_snap != &snap
@@ -1162,19 +1165,7 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
         // Check playing status before snap is moved
         let is_playing = snap.is_playing;
 
-        if let Some(image) = snap.props.album_image.clone() {
-            let mut last_thumb_guard = state.last_non_empty_thumbnail.lock().await;
-            *last_thumb_guard = Some(image);
-        }
-
         if should_emit {
-            // Always update last_cached_title to current track title
-            // This is used for stale detection on the NEXT poll cycle
-            // Even if we skip this thumbnail, we want to compare against the current
-            // title on next fetch to continue detecting staleness
-            let mut last_title_guard = state.last_cached_title.lock().await;
-            *last_title_guard = Some(snap.props.title.clone());
-
             *snapshot_guard = Some(snap.clone());
             drop(snapshot_guard); // Release snapshot lock before acquiring props lock
 
@@ -1194,6 +1185,28 @@ async fn start_gsmtc_polling(app: AppHandle, state: Arc<MediaState>) {
 }
 
 // ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+async fn emit_listener_media(app: &AppHandle, state: &MediaState, mut dto: MediaPropsDto) {
+    let is_stale = match (dto.album_image.as_deref(), state.stale_art_guard.lock()) {
+        (Some(image), Ok(guard)) => guard.is_stale(image, Instant::now()),
+        _ => false,
+    };
+    if is_stale {
+        dto.album_image = None;
+    }
+
+    log::debug!(
+        "gsmtc listener update: {} - {} (album: {:?}, has_image: {})",
+        dto.title,
+        dto.artist,
+        dto.album_title,
+        dto.album_image.is_some()
+    );
+
+    *state.props.lock().await = Some(dto.clone());
+    let _ = app.emit("media_update", dto);
+}
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
@@ -1217,9 +1230,8 @@ async fn start_media_listener(
         });
     }
 
-    // Keep your existing gsmtc-based listener (good, low-latency for many apps).
+    // Event-driven GSMTC listener: lower latency than polling for many apps.
     tauri::async_runtime::spawn(async move {
-        // Manager events receiver
         let mut mgr_rx: UnboundedReceiver<ManagerEvent> = match SessionManager::create().await {
             Ok(rx) => rx,
             Err(e) => {
@@ -1228,80 +1240,60 @@ async fn start_media_listener(
             }
         };
 
-        // Track a single current-session updates receiver for simplicity
-        let mut current_session_rx: Option<UnboundedReceiver<SessionUpdateEvent>> = None;
+        // Updates from every session are forwarded into one channel, tagged with their id,
+        // so they are handled as they arrive rather than only when a manager event fires.
+        let (update_tx, mut update_rx) =
+            unbounded_channel::<(usize, SessionUpdateEvent)>();
+        let mut current_session_id: Option<usize> = None;
+        let mut latest_media: HashMap<usize, MediaPropsDto> = HashMap::new();
 
-        while let Some(evt) = mgr_rx.recv().await {
-            match evt {
-                ManagerEvent::SessionCreated {
-                    session_id,
-                    rx,
-                    source,
-                } => {
-                    log::debug!("SessionCreated id={} source={}", session_id, source);
-                    // If we don't have a session yet, treat the first one as current
-                    if current_session_rx.is_none() {
-                        current_session_rx = Some(rx);
+        loop {
+            tokio::select! {
+                evt = mgr_rx.recv() => {
+                    let Some(evt) = evt else { break };
+                    match evt {
+                        ManagerEvent::SessionCreated { session_id, mut rx, source } => {
+                            log::debug!("SessionCreated id={} source={}", session_id, source);
+                            let tx = update_tx.clone();
+                            tauri::async_runtime::spawn(async move {
+                                while let Some(update) = rx.recv().await {
+                                    if tx.send((session_id, update)).is_err() {
+                                        break;
+                                    }
+                                }
+                            });
+                        }
+                        ManagerEvent::CurrentSessionChanged { session_id } => {
+                            log::debug!("CurrentSessionChanged: {:?}", session_id);
+                            current_session_id = session_id;
+                            if let Some(dto) = session_id.and_then(|id| latest_media.get(&id)) {
+                                emit_listener_media(&app_handle, &state_arc, dto.clone()).await;
+                            }
+                        }
+                        ManagerEvent::SessionRemoved { session_id } => {
+                            log::debug!("SessionRemoved id={}", session_id);
+                            latest_media.remove(&session_id);
+                            if current_session_id == Some(session_id) {
+                                current_session_id = None;
+                            }
+                        }
                     }
                 }
-                ManagerEvent::CurrentSessionChanged { session_id } => {
-                    log::debug!("CurrentSessionChanged: {:?}", session_id);
-                    // For a full solution, you’d maintain a map from session_id to its rx,
-                    // and switch current_session_rx here. Kept simple for now.
-                    let _ = session_id;
-                }
-                ManagerEvent::SessionRemoved { session_id } => {
-                    log::debug!("SessionRemoved id={}", session_id);
-                    // In a full solution, drop the corresponding rx if it was current.
-                }
-            }
+                Some((session_id, update)) = update_rx.recv() => {
+                    let SessionUpdateEvent::Media(session_model, image) = update else {
+                        continue;
+                    };
+                    let media = session_model.media.as_ref();
+                    let dto = MediaPropsDto {
+                        title: media.map(|m| m.title.clone()).unwrap_or_default(),
+                        artist: media.map(|m| m.artist.clone()).unwrap_or_default(),
+                        album_title: media.and_then(|m| m.album.as_ref().map(|a| a.title.clone())),
+                        album_image: image.map(|img| BASE64.encode(img.data)),
+                    };
+                    latest_media.insert(session_id, dto.clone());
 
-            // Drain updates from the current session, if any
-            if let Some(rx) = current_session_rx.as_mut() {
-                while let Ok(update) = rx.try_recv() {
-                    if let SessionUpdateEvent::Media(session_model, image) = update {
-                        let album_image = image
-                            .and_then(|img| Some(img.data))
-                            .map(|bytes| BASE64.encode(bytes));
-
-                        let title = session_model
-                            .media
-                            .as_ref()
-                            .map(|m| m.title.clone())
-                            .unwrap_or_default();
-
-                        let artist = session_model
-                            .media
-                            .as_ref()
-                            .map(|m| m.artist.clone())
-                            .unwrap_or_default();
-
-                        let album_title = session_model
-                            .media
-                            .as_ref()
-                            .and_then(|m| m.album.clone().map(|a| a.title));
-
-                        log::debug!(
-                            "gsmtc listener update: {} - {} (album: {:?}, has_image: {})",
-                            title,
-                            artist,
-                            album_title,
-                            album_image.is_some()
-                        );
-
-                        let dto = MediaPropsDto {
-                            title,
-                            artist,
-                            album_title,
-                            album_image,
-                        };
-
-                        {
-                            let mut guard = state_arc.props.lock().await;
-                            *guard = Some(dto.clone());
-                        }
-
-                        let _ = app_handle.emit("media_update", dto);
+                    if current_session_id == Some(session_id) {
+                        emit_listener_media(&app_handle, &state_arc, dto).await;
                     }
                 }
             }
@@ -1682,31 +1674,15 @@ async fn refresh_media_snapshot(
         }
     };
 
-    // Get previous data for stale-art detection and title comparison.
-    // Keep stale-art thumbnail source independent from snapshot image.
-    let prev_thumbnail = state.last_non_empty_thumbnail.lock().await.clone();
-    let prev_title = {
-        let snapshot_guard = state.snapshot.lock().await;
-        snapshot_guard
-            .as_ref()
-            .map(|prev_snap| prev_snap.props.title.clone())
-    };
-
     let snap = snapshot_from_session(
         &session,
         Some(&state.thumbnail_cache),
-        prev_thumbnail.as_ref(),
-        prev_title.as_deref(),
+        &state.stale_art_guard,
     )?;
 
     let mut snapshot_guard = state.snapshot.lock().await;
     *snapshot_guard = Some(snap.clone());
     drop(snapshot_guard);
-
-    if let Some(image) = snap.props.album_image.clone() {
-        let mut last_thumb_guard = state.last_non_empty_thumbnail.lock().await;
-        *last_thumb_guard = Some(image);
-    }
 
     let mut props_guard = state.props.lock().await;
     *props_guard = Some(snap.props.clone());
@@ -2056,5 +2032,74 @@ mod tests {
     fn unset_windows_ticks_are_ignored() {
         assert_eq!(windows_ticks_to_unix_ms(0), None);
         assert_eq!(windows_ticks_to_unix_ms(WINDOWS_TO_UNIX_EPOCH_TICKS), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    mod stale_art_guard {
+        use super::*;
+
+        fn guard_showing(identity: &str, album: Option<&str>, art: &str, now: Instant) -> StaleArtGuard {
+            let mut guard = StaleArtGuard::default();
+            guard.observe_track(identity, album, now);
+            guard.accept(art);
+            guard
+        }
+
+        #[test]
+        fn rejects_previous_album_art_for_entire_window_not_just_first_poll() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t10", Some("Album A"), "art-a", start);
+
+            guard.observe_track("t11", Some("Album B"), start);
+            assert!(guard.is_stale("art-a", start));
+            // Later polls of the same track must still reject the lagging thumbnail.
+            assert!(guard.is_stale("art-a", start + Duration::from_millis(300)));
+            assert!(guard.is_verifying(start + Duration::from_millis(300)));
+            assert!(!guard.is_stale("art-b", start + Duration::from_millis(300)));
+        }
+
+        #[test]
+        fn accepts_shared_art_after_window_and_keeps_verifying() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t10", Some("Album A"), "art-a", start);
+            guard.observe_track("t11", Some("Album B"), start);
+
+            let later = start + STALE_ART_WINDOW;
+            assert!(!guard.is_stale("art-a", later));
+            guard.accept("art-a");
+            assert!(guard.is_verifying(later + Duration::from_secs(10)));
+
+            guard.accept("art-b");
+            assert!(!guard.is_verifying(later + Duration::from_secs(10)));
+        }
+
+        #[test]
+        fn same_album_tracks_share_art() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t1", Some("Album A"), "art-a", start);
+            guard.observe_track("t2", Some("Album A"), start);
+            assert!(!guard.is_stale("art-a", start));
+        }
+
+        #[test]
+        fn staged_metadata_update_keeps_suspect() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t10", Some("Album A"), "art-a", start);
+
+            // Windows publishes the new album before the new title...
+            guard.observe_track("t10-b", Some("Album B"), start);
+            // ...and then the title, which no longer looks like an album change.
+            guard.observe_track("t11", Some("Album B"), start + Duration::from_millis(100));
+            assert!(guard.is_stale("art-a", start + Duration::from_millis(200)));
+        }
+
+        #[test]
+        fn unknown_album_uses_short_window() {
+            let start = Instant::now();
+            let mut guard = guard_showing("t1", None, "art", start);
+            guard.observe_track("t2", None, start);
+            assert!(guard.is_stale("art", start));
+            assert!(!guard.is_stale("art", start + STALE_ART_WINDOW_UNKNOWN_ALBUM));
+        }
     }
 }
