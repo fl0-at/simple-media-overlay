@@ -24,6 +24,7 @@ type MediaSnapshot = {
 
 export function useMediaInfo() {
   const [media, setMedia] = useState<MediaProps | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let unlistenMediaUpdate: (() => void) | undefined;
@@ -60,6 +61,8 @@ export function useMediaInfo() {
       } catch (err) {
         console.error('Failed to listen for media_snapshot', err);
       }
+
+      setIsLoading(false);
     })();
 
     return () => {
@@ -68,5 +71,5 @@ export function useMediaInfo() {
     };
   }, []);
 
-  return media;
+  return { media, isLoading };
 }

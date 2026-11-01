@@ -20,7 +20,14 @@ I decided to add a second overlay that displays synced lyrics, if available, sin
 - 🔁 Toggle repeat mode and/or shuffle, [if supported by the player](#current-limitations)
 - 🎼 Toggle the _Lyrics Overlay_ to see synced lyrics, if available on [LRC Library](https://lrclib.net)
 - ✨ Fancy animations when the currently played media or the playback source changes, is played/paused or the overlay is pinned
+- Album art shows a loading skeleton during track changes and image loading. If artwork is still missing after two seconds or fails to load, the no-art placeholder is shown.
 - 🔃 Automatic app-updates to ensure you are running the latest version
+
+### Lyrics service errors
+
+The lyrics overlay shows specific messages for connection failures, timeouts, rate limits, and temporary LRCLIB outages (including HTTP 502). These errors offer a **Retry** button; when LRCLIB sends a `Retry-After` delay in seconds, the button stays disabled with a countdown until that delay has elapsed. Requests are not retried automatically.
+
+Missing lyrics, tracks without synced lyrics, invalid track information, access-denied responses, and unreadable or unexpected responses do not offer an immediate retry. Missing lyrics are not cached, so switching tracks or reopening the overlay can check again later. Valid instrumental tracks continue to display the instrumental indicator.
 
 ## Prerequisites
 
@@ -66,6 +73,18 @@ The app includes automatic updates - you'll be notified when a new version is av
    ```
 
 Make sure you have [Rust](https://www.rust-lang.org/tools/install) and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) installed before building.
+
+### Running checks and tests
+
+Install dependencies with `npm ci` (or `npm install` when setting up locally), then run the frontend checks:
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
+The test suite uses Vitest. GitHub Actions runs all three checks for pull requests targeting `master` or `develop`, pushes to those branches, and before creating a release. To block merging when a check fails, require the `Tests / Lint, test, and build` status check in the repository's branch protection rules or rulesets for both branches.
 
 ## Supported media playback sources
 
@@ -144,7 +163,7 @@ If that happens, you can still enable it manually through the desktop environmen
 
 **Timeline shows incorrect progress?**
 
-- This is currently a [known issue](https://github.com/fl0-at/simple-media-overlay/issues/4) that I am working on, so feel free to contribute if you spot the root cause of this problem
+- The overlay extrapolates progress from the position and timestamp the player last reported (GSMTC `LastUpdatedTime` on Windows, live MPRIS position on Linux), so it stays in sync when the overlay starts mid-track or reloads. If a specific player still shows wrong progress, it most likely reports an inaccurate timeline; please add details to the [tracking issue](https://github.com/fl0-at/simple-media-overlay/issues/4)
 
 **Media not showing up?**
 

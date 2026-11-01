@@ -6,6 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useState, MouseEvent, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { WindowControls } from '../WindowControls';
+import { getLyricsErrorDisplay, getRetrySecondsRemaining } from './errors';
 
 interface LyricsData {
   plainLyrics: string | null;
@@ -77,6 +78,8 @@ export default function LyricsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [canRetry, setCanRetry] = useState(false);
+  const [retryAt, setRetryAt] = useState(0);
+  const [retrySecondsRemaining, setRetrySecondsRemaining] = useState(0);
   const [pinned, setPinned] = useState(false);
   const dragRegionProps = pinned ? {} : { 'data-tauri-drag-region': '' };
   
@@ -86,11 +89,27 @@ export default function LyricsPage() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const currentWindowRef = useRef<ReturnType<typeof getCurrentWindow> | null>(null);
   const noLyricsTimeoutRef = useRef<number | null>(null);
+  const fetchRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!retryAt) return;
+    const timer = window.setInterval(() => {
+      const remaining = getRetrySecondsRemaining(retryAt);
+      setRetrySecondsRemaining(remaining);
+      if (remaining === 0) window.clearInterval(timer);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [retryAt]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
       currentWindowRef.current = getCurrentWindow();
+      currentWindowRef.current.show()
+        .then(() => currentWindowRef.current?.setFocus())
+        .catch((e: unknown) => {
+          console.error('lyrics window show/focus failed', e);
+        });
     } catch {
       currentWindowRef.current = null;
     }
@@ -137,13 +156,19 @@ export default function LyricsPage() {
   };
 
   const fetchLyrics = async (title: string, artist: string, albumTitle?: string | null, durationMs?: number | null) => {
+    const requestId = ++fetchRequestIdRef.current;
+
     // Early return if title or artist is missing — debounce to avoid flicker
-    if (!title || !artist) {
+    if (!title.trim() || !artist.trim()) {
+      setCanRetry(false);
+      setRetryAt(0);
+      setRetrySecondsRemaining(0);
       if (noLyricsTimeoutRef.current) {
         clearTimeout(noLyricsTimeoutRef.current);
         noLyricsTimeoutRef.current = null;
       }
       noLyricsTimeoutRef.current = window.setTimeout(() => {
+        if (requestId !== fetchRequestIdRef.current) return;
         setLoading(false);
         setError('No lyrics available');
         setCanRetry(false);
@@ -164,6 +189,8 @@ export default function LyricsPage() {
     setLoading(true);
     setError(null);
     setCanRetry(false);
+    setRetryAt(0);
+    setRetrySecondsRemaining(0);
 
     try {
       const result = await invoke<LyricsData>('fetch_lyrics', {
@@ -173,6 +200,8 @@ export default function LyricsPage() {
         durationMs,
       });
 
+      if (requestId !== fetchRequestIdRef.current) return;
+
       setLyrics(result);
 
       if (result.syncedLyrics) {
@@ -181,37 +210,26 @@ export default function LyricsPage() {
         setParsedLyrics([]);
       }
     } catch (e) {
-      const errorMsg = String(e);
+      if (requestId !== fetchRequestIdRef.current) return;
 
-      // Only show user-friendly errors to the user
-      if (errorMsg.includes('No lyrics found') || errorMsg.includes('No synced lyrics')) {
-        // 404 - not an error, just no lyrics available (silently handle)
-        setError('No synced lyrics available');
-        setCanRetry(false);
-      } else if (errorMsg.includes('timeout') || errorMsg.includes('connect')) {
-        console.warn('Lyrics fetch warning:', errorMsg);
-        setError('Connection failed');
-        setCanRetry(true);
-      } else if (errorMsg.includes('Rate limit')) {
-        console.warn('Lyrics fetch warning:', errorMsg);
-        setError('Rate limited. Please wait.');
-        setCanRetry(true);
-      } else {
-        // Generic errors - don't show to user, just log
-        console.error('Lyrics fetch error:', errorMsg);
-        setError('Unable to load lyrics');
-        setCanRetry(true);
-      }
+      console.warn('Lyrics fetch failed:', e);
+      const display = getLyricsErrorDisplay(e);
+      setError(display.message);
+      setCanRetry(display.canRetry);
+      setRetryAt(display.retryAfterSeconds > 0 ? Date.now() + display.retryAfterSeconds * 1000 : 0);
+      setRetrySecondsRemaining(display.retryAfterSeconds);
 
       setLyrics(null);
       setParsedLyrics([]);
     } finally {
-      setLoading(false);
+      if (requestId === fetchRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   const handleRetry = () => {
-    if (lastFetchParams) {
+    if (lastFetchParams && canRetry && !loading && getRetrySecondsRemaining(retryAt) === 0) {
       fetchLyrics(
         lastFetchParams.title,
         lastFetchParams.artist,
@@ -407,9 +425,10 @@ export default function LyricsPage() {
           {canRetry && (
             <button
               onClick={handleRetry}
-              className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-full text-sm text-white transition-colors"
+              disabled={retrySecondsRemaining > 0}
+              className="px-4 py-2 bg-white/10 hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed rounded-full text-sm text-white transition-colors"
             >
-              Retry
+              {retrySecondsRemaining > 0 ? `Retry in ${retrySecondsRemaining}s` : 'Retry'}
             </button>
           )}
         </div>

@@ -11,7 +11,11 @@ on:
       - '.gitignore'
 
 jobs:
+  tests:
+    uses: ./.github/workflows/test.yml
+
   bump-version:
+    needs: tests
     runs-on: ubuntu-latest
     permissions:
       contents: write
